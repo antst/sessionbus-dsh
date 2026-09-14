@@ -14,6 +14,8 @@ function argumentSchema() {
   for (const field of ["persistent", "notify", "forget"]) properties[field] = { type: "boolean" };
   for (const field of ["auto_close_ms", "timeout_ms"]) properties[field] = { type: "integer" };
   properties.idle_message = { type: "string", enum: ["stage", "run"] };
+  properties.trace = { type: "string", enum: ["off", "events", "content"] };
+  properties.mode = { type: "string", enum: ["off", "events", "content"] };
   const open = {};
   for (const field of ["cwd", "permission_mode", "model", "reasoning_effort"]) open[field] = { type: "string" };
   open.arguments = { type: "array", items: { type: "string" } };
@@ -310,7 +312,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   };
   ctx.tools.register(dependencies.defineTool({
     name: "sessionbus",
-    description: "List and control sessionbus sessions.",
+    description: "List, message, spawn and control Sessionbus sessions. Use trace mode off, events or content to configure live parent tracing for a direct child; spawn trace sets its initial mode.",
     parameters: { action: { type: "string", enum: ACTIONS, required: true }, arguments: argumentsSchema },
     output: { schema: { type: "object", additionalProperties: true, properties: {} }, render: (_args, result) => [{ type: "text", text: JSON.stringify(result) }] },
     execute,

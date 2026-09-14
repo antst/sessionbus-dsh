@@ -454,6 +454,8 @@ test("peer title re-hellos are serialized and finish on the newest title", async
 test("native tool arguments expose the exact closed MCP union", () => {
   const ctx = new Context();
   createRuntime(ctx, {}, dependencies(ctx));
+  assert.deepEqual(ACTIONS, ["list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"]);
+  assert.match(ctx.tool.description, /trace mode off, events or content/u);
   assert.deepEqual(ctx.tool.parameters, {
     action: { type: "string", enum: ACTIONS, required: true },
     arguments: {
@@ -469,6 +471,8 @@ test("native tool arguments expose the exact closed MCP union", () => {
         persistent: { type: "boolean" }, notify: { type: "boolean" }, forget: { type: "boolean" },
         auto_close_ms: { type: "integer" }, timeout_ms: { type: "integer" },
         idle_message: { type: "string", enum: ["stage", "run"] },
+        trace: { type: "string", enum: ["off", "events", "content"] },
+        mode: { type: "string", enum: ["off", "events", "content"] },
         open: {
           type: "object", additionalProperties: false,
           properties: {
@@ -500,8 +504,9 @@ for (const mode of ["peer", "lane"]) {
       ["send", { target: "recipient", message: "Complete message" }],
       ["send", { targets: ["one", "two"], message: "Complete message" }],
       ["send", { group: "team", host: "host", message: "Complete message" }],
-      ["spawn", { product: "dashi", name: "worker", extra_groups: ["team"], persistent: true, notify: false, notify_target: "owner", auto_close_ms: 0, idle_message: "stage", open: { cwd: "/workspace", permission_mode: "ask", model: "model", reasoning_effort: "high", arguments: ["--flag"] } }],
-      ["spawn", { resume_session_id: "previous", idle_message: "run" }],
+      ["spawn", { product: "dashi", name: "worker", extra_groups: ["team"], persistent: true, notify: false, notify_target: "owner", auto_close_ms: 0, idle_message: "stage", trace: "events", open: { cwd: "/workspace", permission_mode: "ask", model: "model", reasoning_effort: "high", arguments: ["--flag"] } }],
+      ["spawn", { resume_session_id: "previous", idle_message: "run", trace: "off" }],
+      ["trace", { session_id: "worker", mode: "content" }],
       ["run", { session_id: "worker", input: "go" }],
       ["wait", { session_id: "worker", run_id: "run", timeout_ms: 0 }],
       ["close", { session_id: "worker", forget: true }],
@@ -511,7 +516,7 @@ for (const mode of ["peer", "lane"]) {
       assert.deepEqual(forwarded.at(-1), { action, args });
       assert.equal(forwarded.at(-1).args, args);
     }
-    assert.equal(new Set(requests.flatMap(([, args]) => Object.keys(args))).size, 20);
+    assert.equal(new Set(requests.flatMap(([, args]) => Object.keys(args))).size, 22);
     for (const [args, message] of [
       [{ target: "recipient", message: "Complete message", summary: "extra" }, /arguments\.summary is not supported/],
       [{ unexpected: true }, /arguments\.unexpected is not supported/],
