@@ -451,6 +451,86 @@ test("peer title re-hellos are serialized and finish on the newest title", async
   assert.equal(runtime.peers.get(one).peer.identity.name, "Newest");
 });
 
+test("native tool arguments expose the exact closed MCP union", () => {
+  const ctx = new Context();
+  createRuntime(ctx, {}, dependencies(ctx));
+  assert.deepEqual(ACTIONS, ["list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"]);
+  assert.match(ctx.tool.description, /trace mode off, events or content/u);
+  assert.deepEqual(ctx.tool.parameters, {
+    action: { type: "string", enum: ACTIONS, required: true },
+    arguments: {
+      type: "object", additionalProperties: false,
+      description: "Use only the fields listed for the selected action in the tool description. send has no summary field; put the complete content in message.",
+      properties: {
+        session_id: { type: "string" }, host: { type: "string" }, message: { type: "string" },
+        target: { type: "string" }, group: { type: "string" }, product: { type: "string" },
+        name: { type: "string" }, resume_session_id: { type: "string" }, notify_target: { type: "string" },
+        input: { type: "string" }, run_id: { type: "string" },
+        targets: { type: "array", items: { type: "string" } },
+        extra_groups: { type: "array", items: { type: "string" } },
+        persistent: { type: "boolean" }, notify: { type: "boolean" }, forget: { type: "boolean" },
+        auto_close_ms: { type: "integer" }, timeout_ms: { type: "integer" },
+        idle_message: { type: "string", enum: ["stage", "run"] },
+        trace: { type: "string", enum: ["off", "events", "content"] },
+        mode: { type: "string", enum: ["off", "events", "content"] },
+        open: {
+          type: "object", additionalProperties: false,
+          properties: {
+            cwd: { type: "string" }, permission_mode: { type: "string" }, model: { type: "string" },
+            reasoning_effort: { type: "string" }, arguments: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+    },
+  });
+  ctx.dispose();
+});
+
+for (const mode of ["peer", "lane"]) {
+  test(`native tool accepts known arguments and rejects unknown keys before ${mode} action`, async () => {
+    const { ctx, native, deps, runtime } = mode === "lane" ? await openedLane() : (() => {
+      const ctx = new Context();
+      const native = agent(ctx);
+      const deps = dependencies(ctx);
+      const runtime = createRuntime(ctx, {}, deps);
+      ctx.ready();
+      return { ctx, native, deps, runtime };
+    })();
+    const forwarded = [];
+    const client = mode === "lane" ? deps.workerCaller : deps.peers[0].caller;
+    client.action = (action, args) => { forwarded.push({ action, args }); return "accepted"; };
+    const requests = [
+      ["list", {}], ["list", { session_id: "self" }], ["list", { host: "host" }],
+      ["send", { target: "recipient", message: "Complete message" }],
+      ["send", { targets: ["one", "two"], message: "Complete message" }],
+      ["send", { group: "team", host: "host", message: "Complete message" }],
+      ["spawn", { product: "dashi", name: "worker", extra_groups: ["team"], persistent: true, notify: false, notify_target: "owner", auto_close_ms: 0, idle_message: "stage", trace: "events", open: { cwd: "/workspace", permission_mode: "ask", model: "model", reasoning_effort: "high", arguments: ["--flag"] } }],
+      ["spawn", { resume_session_id: "previous", idle_message: "run", trace: "off" }],
+      ["trace", { session_id: "worker", mode: "content" }],
+      ["run", { session_id: "worker", input: "go" }],
+      ["wait", { session_id: "worker", run_id: "run", timeout_ms: 0 }],
+      ["close", { session_id: "worker", forget: true }],
+    ];
+    for (const [action, args] of requests) {
+      assert.equal(await ctx.tool.execute({ action, arguments: args }, { agent: native }), "accepted");
+      assert.deepEqual(forwarded.at(-1), { action, args });
+      assert.equal(forwarded.at(-1).args, args);
+    }
+    assert.equal(new Set(requests.flatMap(([, args]) => Object.keys(args))).size, 22);
+    for (const [args, message] of [
+      [{ target: "recipient", message: "Complete message", summary: "extra" }, /arguments\.summary is not supported/],
+      [{ unexpected: true }, /arguments\.unexpected is not supported/],
+      [{ open: { cwd: "/workspace", summary: "extra" } }, /arguments\.open\.summary is not supported/],
+      [{ open: [] }, /arguments\.open must be an object/],
+      [[], /arguments must be an object/],
+    ]) {
+      assert.throws(() => ctx.tool.execute({ action: "send", arguments: args }, { agent: native }), message);
+      assert.equal(forwarded.length, requests.length);
+    }
+    runtime.close();
+  });
+}
+
 test("worker boot failure reports once and exits one before admission", async () => {
   const ctx = new Context();
   const { deps, runtime } = lane(ctx);

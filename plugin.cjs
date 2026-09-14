@@ -6,6 +6,32 @@ const kit = require("@sessionbus/kit");
 const version = require("./package.json").version;
 const { ACTIONS } = kit;
 
+// Match the MCP tool's closed union; the public kit validates each action.
+function argumentSchema() {
+  const properties = {};
+  for (const field of ["session_id", "host", "message", "target", "group", "product", "name", "resume_session_id", "notify_target", "input", "run_id"]) properties[field] = { type: "string" };
+  for (const field of ["targets", "extra_groups"]) properties[field] = { type: "array", items: { type: "string" } };
+  for (const field of ["persistent", "notify", "forget"]) properties[field] = { type: "boolean" };
+  for (const field of ["auto_close_ms", "timeout_ms"]) properties[field] = { type: "integer" };
+  properties.idle_message = { type: "string", enum: ["stage", "run"] };
+  properties.trace = { type: "string", enum: ["off", "events", "content"] };
+  properties.mode = { type: "string", enum: ["off", "events", "content"] };
+  const open = {};
+  for (const field of ["cwd", "permission_mode", "model", "reasoning_effort"]) open[field] = { type: "string" };
+  open.arguments = { type: "array", items: { type: "string" } };
+  properties.open = { type: "object", additionalProperties: false, properties: open };
+  return { type: "object", additionalProperties: false, properties, description: "Use only the fields listed for the selected action in the tool description. send has no summary field; put the complete content in message." };
+}
+
+function assertKnownArguments(value, schema, location = "arguments") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`sessionbus ${location} must be an object`);
+  for (const field of Object.keys(value)) {
+    if (!Object.hasOwn(schema.properties, field)) throw new Error(`sessionbus ${location}.${field} is not supported`);
+    const property = schema.properties[field];
+    if (property.type === "object") assertKnownArguments(value[field], property, `${location}.${field}`);
+  }
+}
+
 const name = "sessionbus-dsh";
 const inject = [
   "agents", "appReady", "appExit", "commands", "permissionPresets",
@@ -276,15 +302,18 @@ function createRuntime(ctx, config, dependencies, prepared) {
     }, { global: true });
   }
   const caller = (agent) => worker && native.agent === agent ? worker.caller : peers.get(agent)?.peer.caller;
+  const argumentsSchema = argumentSchema();
   const execute = (argumentsValue, execution) => {
     const client = caller(execution?.agent);
     if (!client) throw new Error("sessionbus requires an exact live DSH root");
-    return client.action(argumentsValue.action, argumentsValue.arguments || {});
+    const args = argumentsValue.arguments || {};
+    assertKnownArguments(args, argumentsSchema);
+    return client.action(argumentsValue.action, args);
   };
   ctx.tools.register(dependencies.defineTool({
     name: "sessionbus",
-    description: "List and control sessionbus sessions.",
-    parameters: { action: { type: "string", enum: ACTIONS, required: true }, arguments: { type: "object", additionalProperties: true } },
+    description: "List, message, spawn and control Sessionbus sessions. Use trace mode off, events or content to configure live parent tracing for a direct child; spawn trace sets its initial mode.",
+    parameters: { action: { type: "string", enum: ACTIONS, required: true }, arguments: argumentsSchema },
     output: { schema: { type: "object", additionalProperties: true, properties: {} }, render: (_args, result) => [{ type: "text", text: JSON.stringify(result) }] },
     execute,
   }));
