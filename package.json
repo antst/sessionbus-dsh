@@ -10,7 +10,7 @@
     "test": "node --test plugin.test.cjs install.test.mjs package.test.cjs rename.test.mjs"
   },
   "dependencies": {
-    "@sessionbus/kit": "0.1.0-pre.2"
+    "@sessionbus/kit": "0.1.0-pre.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.2",

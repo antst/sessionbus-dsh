@@ -14,7 +14,7 @@ test("package metadata stays rooted in the standalone repository", () => {
     url: "git+https://github.com/antst/sessionbus-dsh.git",
   });
   assert.deepEqual(manifest.files, ["README.md", "plugin.cjs", "bin.mjs", "install.mjs"]);
-  assert.equal(manifest.dependencies["@sessionbus/kit"], "0.1.0-pre.2");
+  assert.equal(manifest.dependencies["@sessionbus/kit"], "0.1.0-pre.3");
 });
 
 test("the extracted package imports and its real bin performs installation", () => {
