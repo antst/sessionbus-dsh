@@ -21,18 +21,13 @@ test("installer creates only the lane profile and leaves the root patch untouche
   };
   const rootPatch = "# product-owned peer configuration\n- insert:\n    - { id: product-peer, name: product-peer }\n";
   writeFileSync(path.join(home, "cordis.patch.yml"), rootPatch);
-  const bundle = path.join(home, "profiles", "native-app", "node_modules", "native-bundle");
-  mkdirSync(bundle, { recursive: true });
-  writeFileSync(path.join(home, "profiles", "native-app", "package.json"), JSON.stringify({ dsh: { profile: { bundles: ["native-bundle"] } } }));
-  writeFileSync(path.join(bundle, "package.json"), JSON.stringify({ dsh: { bundle: { patch: "./cordis.patch.yml" } } }));
-  writeFileSync(path.join(bundle, "cordis.patch.yml"), "- id: sessionbus\n  name: '@sessionbus/dsh'\n");
-  install({ home, root, run });
+  install([], { home, root, run });
   const first = {
     manifest: readFileSync(path.join(home, "profiles", "sessionbus", "package.json"), "utf8"),
     profile: readFileSync(path.join(home, "profiles", "sessionbus", "cordis.patch.yml"), "utf8"),
     peer: readFileSync(path.join(home, "cordis.patch.yml"), "utf8"),
   };
-  install({ home, root, run });
+  install([], { home, root, run });
   assert.equal(runs, 1);
   assert.deepEqual({
     manifest: readFileSync(path.join(home, "profiles", "sessionbus", "package.json"), "utf8"),
@@ -69,34 +64,28 @@ test("installer creates only the lane profile and leaves the root patch untouche
   });
 });
 
-test("installer adds one root peer row for a plain DSH host", () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-plain-home-"));
-  const profile = path.join(home, "profiles", "sessionbus");
-  mkdirSync(profile, { recursive: true });
-  writeFileSync(path.join(profile, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
-  writeFileSync(path.join(profile, "cordis.patch.yml"), "[]\n");
-  install({ home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
-  const first = readFileSync(path.join(home, "cordis.patch.yml"), "utf8");
-  assert.equal((first.match(/id: sessionbus/gu) || []).length, 1);
-  install({ home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
-  assert.equal(readFileSync(path.join(home, "cordis.patch.yml"), "utf8"), first);
+test("installer adds one profile-local peer row to each named profile", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-peer-home-"));
+  for (const name of ["web", "custom"]) {
+    const profile = path.join(home, "profiles", name);
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(path.join(profile, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+    writeFileSync(path.join(profile, "cordis.patch.yml"), "[]\n");
+  }
+  install(["web", "custom"], { home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
+  for (const name of ["web", "custom"]) assert.match(readFileSync(path.join(home, "profiles", name, "cordis.patch.yml"), "utf8"), /id: sessionbus/u);
+  assert.equal(existsSync(path.join(home, "cordis.patch.yml")), false);
 });
 
-test("installer removes its obsolete root row when a product bundle provides the peer", () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-converge-home-"));
-  const lane = path.join(home, "profiles", "sessionbus");
-  mkdirSync(lane, { recursive: true });
-  writeFileSync(path.join(lane, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
-  writeFileSync(path.join(lane, "cordis.patch.yml"), "[]\n");
-  const bundle = path.join(home, "profiles", "product", "node_modules", "product-bundle");
-  mkdirSync(bundle, { recursive: true });
-  writeFileSync(path.join(home, "profiles", "product", "package.json"), JSON.stringify({ dsh: { profile: { bundles: ["product-bundle"] } } }));
-  writeFileSync(path.join(bundle, "package.json"), JSON.stringify({ dsh: { bundle: { patch: "./cordis.patch.yml" } } }));
-  writeFileSync(path.join(bundle, "cordis.patch.yml"), "- insert:\n    - { id: sessionbus, name: '@sessionbus/dsh' }\n");
-  const rootPatch = path.join(home, "cordis.patch.yml");
-  writeFileSync(rootPatch, "- insert:\n    - { id: sessionbus, name: '@sessionbus/dsh' }\n");
-  install({ home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
-  assert.equal(existsSync(rootPatch), false);
+test("installer leaves a named profile's existing sessionbus row unchanged", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-native-home-"));
+  const dashi = path.join(home, "profiles", "dashi");
+  mkdirSync(dashi, { recursive: true });
+  writeFileSync(path.join(dashi, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+  const patch = "- insert:\n    - { id: sessionbus, name: '@sessionbus/dsh', config: { groups: [native] } }\n";
+  writeFileSync(path.join(dashi, "cordis.patch.yml"), patch);
+  install(["dashi"], { home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
+  assert.equal(readFileSync(path.join(dashi, "cordis.patch.yml"), "utf8"), patch);
 });
 
 test("installed bin symlink runs the installer", () => {
@@ -112,5 +101,5 @@ test("installed bin symlink runs the installer", () => {
   const result = spawnSync(command, [], { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
   assert.equal(result.status, 0, result.stderr);
   assert.match(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), /mode: lane/u);
-  assert.match(readFileSync(path.join(home, "cordis.patch.yml"), "utf8"), /id: sessionbus/u);
+  assert.equal(readFileSync(path.join(home, "cordis.patch.yml"), "utf8"), "[]\n");
 });

@@ -13,8 +13,11 @@ test("package metadata stays rooted in the standalone repository", () => {
     type: "git",
     url: "git+https://github.com/antst/sessionbus-dsh.git",
   });
-  assert.deepEqual(manifest.files, ["README.md", "plugin.cjs", "bin.mjs", "install.mjs"]);
+  assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "bin.mjs", "install.mjs"]);
   assert.equal(manifest.dependencies["@sessionbus/kit"], "0.1.0-pre.3");
+  for (const [name, range] of Object.entries(manifest.peerDependencies)) if (name.startsWith("@deepseek-ai/dsh-")) assert.equal(range, "0.1.5-rc.2 || 0.1.6-alpha.2");
+  assert.equal(manifest.peerDependencies["@deepseek-ai/cordis"], "4.0.2");
+  assert.equal(manifest.peerDependencies["@deepseek-ai/cordis-plugin-loader"], "1.0.3");
 });
 
 test("the extracted package imports and its real bin performs installation", () => {
@@ -62,7 +65,16 @@ test("the extracted package imports and its real bin performs installation", () 
   fs.writeFileSync(path.join(directProfile, "cordis.patch.yml"), "[]\n");
   const direct = spawnSync(process.execPath, [path.join(packageRoot, "bin.mjs")], { encoding: "utf8", env: { ...process.env, DSH_HOME: directHome } });
   assert.equal(direct.status, 0, direct.stderr);
-  assert.match(fs.readFileSync(path.join(directHome, "cordis.patch.yml"), "utf8"), /id: sessionbus/u);
+  assert.match(fs.readFileSync(path.join(directProfile, "cordis.patch.yml"), "utf8"), /mode: lane/u);
+
+  const peerHome = path.join(directory, "peer-home");
+  const peerProfile = path.join(peerHome, "profiles", "web");
+  fs.mkdirSync(peerProfile, { recursive: true });
+  fs.writeFileSync(path.join(peerProfile, "package.json"), '{"dependencies":{"@sessionbus/dsh":"0.1.0-pre.1"}}\n');
+  fs.writeFileSync(path.join(peerProfile, "cordis.patch.yml"), "[]\n");
+  const peer = spawnSync(process.execPath, [path.join(packageRoot, "bin.mjs"), "web"], { encoding: "utf8", env: { ...process.env, DSH_HOME: peerHome } });
+  assert.equal(peer.status, 0, peer.stderr);
+  assert.match(fs.readFileSync(path.join(peerProfile, "cordis.patch.yml"), "utf8"), /id: sessionbus/u);
 
   const failed = spawnSync(command, [], { encoding: "utf8", env: { ...process.env, DSH_HOME: path.join(directory, "failed-home"), PATH: path.dirname(process.execPath) } });
   assert.notEqual(failed.status, 0);
