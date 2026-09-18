@@ -6,6 +6,8 @@ It supports DeepSeek Harness `0.1.5-rc.2` and `0.1.6-alpha.2`.
 `@sessionbus/dsh` is a pkg.pr.new preview until a separately reviewed trusted-
 publishing workflow exists; its first registry version must be published manually
 before trusted publishing can be configured.
+`@antst/dsh-file-uploads-none` is a preview until its npm publish and is swapped
+for the exact published version at release.
 
 The plugin reads the token once, deletes it from process.env, and retains it
 nowhere in the plugin; DSH's immutable launch snapshot keeps it for the process
