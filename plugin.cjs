@@ -310,14 +310,14 @@ function createRuntime(ctx, config, dependencies, prepared) {
     assertKnownArguments(args, argumentsSchema);
     return client.action(argumentsValue.action, args);
   };
-  ctx.tools.register(dependencies.defineTool({
+  const removeTool = ctx.tools.register(dependencies.defineTool({
     name: "sessionbus",
     description: "List, message, spawn and control Sessionbus sessions. Use trace mode off, events or content to configure live parent tracing for a direct child; spawn trace sets its initial mode.",
     parameters: { action: { type: "string", enum: ACTIONS, required: true }, arguments: argumentsSchema },
     output: { schema: { type: "object", additionalProperties: true, properties: {} }, render: (_args, result) => [{ type: "text", text: JSON.stringify(result) }] },
     execute,
   }));
-  ctx.commands.register({
+  const removeCommand = ctx.commands.register({
     name: "sessionbus",
     description: "list sessionbus sessions",
     handler: async (invocation) => ({ kind: "success", text: JSON.stringify(await execute({ action: "list", arguments: {} }, { agent: invocation.agent })) }),
@@ -346,7 +346,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   };
   const removeReady = ctx.appReady.onReady(start);
   const close = () => {
-    removeReady(); removeCreated(); removeDisposed(); removeTitle();
+    removeReady(); removeCreated(); removeDisposed(); removeTitle(); removeCommand(); removeTool();
     for (const agent of peers.keys()) forget(agent);
     worker?.shutdown(); native.removeEvents();
   };

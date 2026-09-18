@@ -34,8 +34,8 @@ class Context {
       rename: async (request) => { this.calls.push(["rename", request]); },
       selectModel: async (request) => { this.calls.push(["model", request]); },
     };
-    this.tools = { register: (tool) => { this.tool = tool; return () => {}; } };
-    this.commands = { register: (command) => { this.command = command; return () => {}; } };
+    this.tools = { register: (tool) => { if (this.tool) throw new Error("duplicate tool"); this.tool = tool; return () => { if (this.tool === tool) this.tool = undefined; }; } };
+    this.commands = { register: (command) => { if (this.command) throw new Error("duplicate command"); this.command = command; return () => { if (this.command === command) this.command = undefined; }; } };
     this.byID = new Map();
   }
   get(name) { return name === "launchEnvironment" ? this.launchEnvironment : undefined; }
@@ -235,6 +235,14 @@ test("resume keeps exact identity and uses the current model for effort", async 
   assert.deepEqual(ctx.calls.find(([call]) => call === "model")[1], { sessionId: native.id, provider: "provider", model: "default", reasoningEffort: "low" });
 });
 
+test("resume relays writer-held as a plain open failure", async () => {
+  const ctx = new Context();
+  const failure = Object.assign(new Error("session is held by another writer"), { code: "session/writer-held" });
+  ctx.sessionController.resolveAgent = async () => ({ error: failure });
+  const { deps } = lane(ctx);
+  await assert.rejects(deps.callbacks.open(null, { name: "held@host", groups: [], resume_session_id: "held", open: {} }), (error) => error === failure);
+});
+
 test("run correlates receipt, turn, output, and terminal", async () => {
   const { ctx, native, deps } = await openedLane();
   native.followup = (message) => {
@@ -422,6 +430,27 @@ test("peer mode tracks roots, re-hellos titles, and binds tools to the executing
   const created = agent(ctx, "session-two");
   ctx.emit("agent/created", { agent: created });
   assert.equal(deps.peers.at(-1).identity.session_id, created.id);
+  runtime.close();
+});
+
+test("disable then enable leaves one connection and one registration", () => {
+  const ctx = new Context();
+  agent(ctx, "session-one");
+  const first = dependencies(ctx);
+  createRuntime(ctx, {}, first);
+  ctx.ready();
+  assert.equal(first.peers.length, 1);
+  ctx.dispose();
+  assert.equal(first.peers[0].stopped, true);
+  assert.equal(ctx.tool, undefined);
+  assert.equal(ctx.command, undefined);
+
+  const second = dependencies(ctx);
+  const runtime = createRuntime(ctx, {}, second);
+  ctx.ready();
+  ctx.emit("agent/created", { agent: ctx.roots[0] });
+  assert.equal(second.peers.length, 1);
+  assert.notEqual(second.peers[0], first.peers[0]);
   runtime.close();
 });
 
