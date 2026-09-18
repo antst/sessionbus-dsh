@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: DSH ${{ matrix.dsh }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh:
+          - 0.1.5-rc.2
+          - 0.1.6-alpha.2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm install --omit=peer --ignore-scripts --no-package-lock
+      - run: npm test
+      - run: .github/scripts/prove-packed-install.sh "${{ matrix.dsh }}"
+
+  gate:
+    if: ${{ always() }}
+    needs: compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require compatibility matrix
+        env:
+          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
+        run: test "$COMPATIBILITY_RESULT" = success
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Publish preview
+        run: npx pkg-pr-new publish . --compact
