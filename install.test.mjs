@@ -51,6 +51,7 @@ test("installer creates only the lane profile and leaves the root patch untouche
 
 - insert:
     - { id: workspace, name: '@deepseek-ai/dsh-workspace' }
+    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }
     - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }
     - id: sessionbus
       name: '@sessionbus/dsh'
@@ -74,10 +75,12 @@ test("installer adds one profile-local peer row to each named profile", () => {
   }
   install(["web", "custom"], { home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
   for (const name of ["web", "custom"]) assert.match(readFileSync(path.join(home, "profiles", name, "cordis.patch.yml"), "utf8"), /id: sessionbus/u);
+  assert.doesNotMatch(readFileSync(path.join(home, "profiles", "web", "cordis.patch.yml"), "utf8"), /file-uploads-none/u);
+  assert.match(readFileSync(path.join(home, "profiles", "custom", "cordis.patch.yml"), "utf8"), /file-uploads-none/u);
   assert.equal(existsSync(path.join(home, "cordis.patch.yml")), false);
 });
 
-test("installer leaves a named profile's existing sessionbus row unchanged", () => {
+test("installer preserves an existing sessionbus row and adds the non-web upload provider", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-native-home-"));
   const dashi = path.join(home, "profiles", "dashi");
   mkdirSync(dashi, { recursive: true });
@@ -85,7 +88,10 @@ test("installer leaves a named profile's existing sessionbus row unchanged", () 
   const patch = "- insert:\n    - { id: sessionbus, name: '@sessionbus/dsh', config: { groups: [native] } }\n";
   writeFileSync(path.join(dashi, "cordis.patch.yml"), patch);
   install(["dashi"], { home, root: path.resolve("."), run: () => assert.fail("dependency already installed") });
-  assert.equal(readFileSync(path.join(dashi, "cordis.patch.yml"), "utf8"), patch);
+  const installed = readFileSync(path.join(dashi, "cordis.patch.yml"), "utf8");
+  assert.equal((installed.match(/id: sessionbus/gu) || []).length, 1);
+  assert.match(installed, /groups: \[native\]/u);
+  assert.match(installed, /file-uploads-none/u);
 });
 
 test("installed bin symlink runs the installer", () => {
@@ -101,5 +107,6 @@ test("installed bin symlink runs the installer", () => {
   const result = spawnSync(command, [], { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
   assert.equal(result.status, 0, result.stderr);
   assert.match(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), /mode: lane/u);
+  assert.match(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), /file-uploads-none/u);
   assert.equal(readFileSync(path.join(home, "cordis.patch.yml"), "utf8"), "[]\n");
 });

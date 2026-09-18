@@ -10,6 +10,7 @@
     "test": "node --test plugin.test.cjs install.test.mjs package.test.cjs rename.test.mjs"
   },
   "dependencies": {
+    "@antst/dsh-file-uploads-none": "https://pkg.pr.new/antst/dashi/@antst/dsh-file-uploads-none@281f390",
     "@sessionbus/kit": "0.1.0-pre.3"
   },
   "peerDependencies": {

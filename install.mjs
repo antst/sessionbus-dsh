@@ -22,6 +22,7 @@ const profilePatch = `- id: system-prompt
 
 - insert:
     - { id: workspace, name: '@deepseek-ai/dsh-workspace' }
+    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }
     - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }
     - id: sessionbus
       name: '@sessionbus/dsh'
@@ -30,16 +31,20 @@ const profilePatch = `- id: system-prompt
 const peerPatch = `- insert:
     - { id: sessionbus, name: '@sessionbus/dsh' }
 `;
+const noUploadsPatch = `- insert:
+    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }
+`;
 const sessionbusID = /(?:^\s*-\s*|[{,]\s*)id\s*:\s*['"]?sessionbus['"]?(?=\s|[,}])/mu;
+const noUploadsID = /(?:^\s*-\s*|[{,]\s*)id\s*:\s*['"]?file-uploads-none['"]?(?=\s|[,}])/mu;
 function writeChanged(file, body) {
   if (!existsSync(file) || readFileSync(file, "utf8") !== body) writeFileSync(file, body);
 }
 
-function convergePeerPatch(file) {
+function convergePatch(file, id, patch) {
   const old = existsSync(file) ? readFileSync(file, "utf8") : "";
-  if (sessionbusID.test(old)) return;
+  if (id.test(old)) return;
   const empty = /^(?:\s*#.*\n)*\s*\[\]\s*$/u.test(old);
-  writeChanged(file, `${empty ? "" : old.trimEnd() + (old.trim() ? "\n\n" : "")}${peerPatch}`);
+  writeChanged(file, `${empty ? "" : old.trimEnd() + (old.trim() ? "\n\n" : "")}${patch}`);
 }
 
 export function install(profileNames = [], options = {}) {
@@ -57,7 +62,9 @@ export function install(profileNames = [], options = {}) {
       manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
     }
     if (name !== "sessionbus") {
-      convergePeerPatch(path.join(profile, "cordis.patch.yml"));
+      const patch = path.join(profile, "cordis.patch.yml");
+      convergePatch(patch, sessionbusID, peerPatch);
+      if (name !== "web") convergePatch(patch, noUploadsID, noUploadsPatch);
       continue;
     }
     manifest = {

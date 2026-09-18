@@ -26,5 +26,7 @@ dsh plugin --profile web add @sessionbus/dsh && dsh plugin --profile web exec se
 The installer writes only profile-local rows and leaves an existing
 `sessionbus` row, such as dashi's, unchanged. With no profile arguments it
 configures only the `sessionbus` lane profile.
+Non-web profiles also receive the no-upload provider required by DSH's Session
+Controller; ordinary text prompts work while file-upload receipts are rejected.
 
 See [Lane without a TUI](docs/LANE-WITHOUT-TUI.md) for the daemon launch contract.
