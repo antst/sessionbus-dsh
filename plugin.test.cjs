@@ -23,6 +23,7 @@ class Context {
     this.roots = [];
     this.exits = [];
     this.calls = [];
+    this.registeredTools = new Map();
     this.titles = new Map();
     this.agents = { roots: () => [...this.roots], get: (id) => this.roots.find((agent) => agent.session.id === id) };
     this.appReady = { onReady: (call) => { this.ready = call; return () => { this.ready = null; }; } };
@@ -40,16 +41,21 @@ class Context {
       rename: async (request) => { this.calls.push(["rename", request]); },
       selectModel: async (request) => { this.calls.push(["model", request]); },
     };
-    this.tools = { register: (tool) => { if (this.tool) throw new Error("duplicate tool"); this.tool = tool; return () => { if (this.tool === tool) this.tool = undefined; }; } };
+    this.tools = { register: (tool) => {
+      if (this.registeredTools.has(tool.name)) throw new Error("duplicate tool");
+      this.registeredTools.set(tool.name, tool);
+      if (tool.name === "sessionbus") this.tool = tool;
+      return () => { this.registeredTools.delete(tool.name); if (this.tool === tool) this.tool = undefined; };
+    } };
     this.commands = { register: (command) => { if (this.command) throw new Error("duplicate command"); this.command = command; return () => { if (this.command === command) this.command = undefined; }; } };
     this.byID = new Map();
   }
   get(name) { return name === "launchEnvironment" ? this.launchEnvironment : undefined; }
-  on(name, call) {
+  on(name, call, options = {}) {
     const list = this.listeners.get(name) || [];
-    list.push(call);
+    if (options.prepend) list.unshift(call); else list.push(call);
     this.listeners.set(name, list);
-    return () => this.listeners.set(name, list.filter((item) => item !== call));
+    return () => this.listeners.set(name, (this.listeners.get(name) || []).filter((item) => item !== call));
   }
   emit(name, ...values) { for (const call of this.listeners.get(name) || []) call(...values); }
   effect(call) { this.dispose = call(); }
@@ -576,6 +582,35 @@ test("native tool arguments expose the exact closed MCP union", () => {
     },
   });
   ctx.dispose();
+});
+
+test("native permission hook overrides a later ask-all policy only for sessionbus", async () => {
+  const ctx = new Context();
+  createRuntime(ctx, { product: "dashi" }, dependencies(ctx));
+  const removeDummy = ctx.tools.register({ name: "w081_dummy" });
+  const removeAsk = ctx.on("tools/pre-execute", async () => ({ kind: "ask", reason: "test ask-all" }));
+  const handlers = ctx.listeners.get("tools/pre-execute");
+  const decide = (execution, index = 0) => handlers[index](execution,
+    () => index + 1 < handlers.length ? decide(execution, index + 1) : Promise.resolve({ kind: "allow" }));
+  assert.deepEqual(await decide({ name: "sessionbus" }), { kind: "allow" });
+  assert.deepEqual(await decide({ name: "w081_dummy" }), { kind: "ask", reason: "test ask-all" });
+  assert.equal(ctx.registeredTools.get("w081_dummy").name, "w081_dummy");
+  removeAsk();
+  removeDummy();
+  ctx.dispose();
+  assert.deepEqual(ctx.listeners.get("tools/pre-execute"), []);
+});
+
+test("an unavailable native permission hook fails before tool registration", () => {
+  const ctx = new Context();
+  const on = ctx.on.bind(ctx);
+  ctx.on = (event, ...args) => {
+    if (event === "tools/pre-execute") throw new Error("hook unavailable");
+    return on(event, ...args);
+  };
+  assert.throws(() => createRuntime(ctx, { product: "dashi" }, dependencies(ctx)),
+    /cannot grant sessionbus tool permission: hook unavailable/u);
+  assert.equal(ctx.tool, undefined);
 });
 
 for (const mode of ["peer", "lane"]) {
