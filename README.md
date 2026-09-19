@@ -13,6 +13,11 @@ The plugin reads the token once, deletes it from process.env, and retains it
 nowhere in the plugin; DSH's immutable launch snapshot keeps it for the process
 lifetime (trusted host).
 
+## Installation
+
+See [Installing a DSH lane host](docs/HOST-INSTALL.md) for the complete
+preflight, installation, verification, and rollback procedure.
+
 Create the base-only lane profile with:
 
 ```sh
