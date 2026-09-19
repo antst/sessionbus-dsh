@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-pre.4 — 2026-09-19
+
+- Supersedes 0.1.0-pre.3, which was tagged but never published to npm; do not reference it.
+- The `sessionbus` tool is permitted by default in every composition (lane profile, dashi row, web or custom peer) through DSH's tools/pre-execute decision; no opt-out; a session without comms is an ordinary launch without the plugin (W-081).
+- @sessionbus/kit 0.5.5: accepts the daemon's optional `policy.trace` on spawn/resume responses (W-083).
+- docs/HOST-INSTALL.md: the host install runbook (daemon service PATH, product registration, in-place profile upgrade, rollback).
+
 ## 0.1.0-pre.3 — 2026-09-19
 
 - The `sessionbus` tool is permitted by default in every composition (lane profile, dashi row, web or custom peer) through DSH's tools/pre-execute decision; no opt-out; a session without comms is an ordinary launch without the plugin (W-081).
