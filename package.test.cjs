@@ -16,9 +16,9 @@ test("package metadata stays rooted in the standalone repository", () => {
   assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "bin.mjs", "install.mjs"]);
   assert.equal(manifest.dependencies["@antst/dsh-file-uploads-none"], "https://pkg.pr.new/antst/dashi/@antst/dsh-file-uploads-none@281f390");
   assert.equal(manifest.dependencies["@sessionbus/kit"], "0.1.0-pre.3");
-  for (const [name, range] of Object.entries(manifest.peerDependencies)) if (name.startsWith("@deepseek-ai/dsh-")) assert.equal(range, "0.1.5-rc.2 || 0.1.6-alpha.2");
-  assert.equal(manifest.peerDependencies["@deepseek-ai/cordis"], "4.0.2");
-  assert.equal(manifest.peerDependencies["@deepseek-ai/cordis-plugin-loader"], "1.0.3");
+  for (const [name, range] of Object.entries(manifest.peerDependencies)) if (name.startsWith("@deepseek-ai/dsh-")) assert.equal(range, ">=0.1.5-rc.2");
+  assert.equal(manifest.peerDependencies["@deepseek-ai/cordis"], "^4.0.2");
+  assert.equal(manifest.peerDependencies["@deepseek-ai/cordis-plugin-loader"], "^1.0.3");
 });
 
 test("the extracted package imports and its real bin performs installation", () => {

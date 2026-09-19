@@ -23,6 +23,7 @@ jobs:
       matrix:
         dsh:
           - 0.1.5-rc.2
+          - 0.1.6-alpha.1
           - 0.1.6-alpha.2
     steps:
       - uses: actions/checkout@v7
@@ -36,15 +37,31 @@ jobs:
       - run: npm test
       - run: .github/scripts/prove-packed-install.sh "${{ matrix.dsh }}"
 
+  peer-floor:
+    name: DSH 0.1.2-rc.1 peer floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.28.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm install --omit=peer --ignore-scripts --no-package-lock
+      - run: .github/scripts/prove-peer-floor.sh
+
   gate:
     if: ${{ always() }}
-    needs: compatibility
+    needs: [compatibility, peer-floor]
     runs-on: ubuntu-latest
     steps:
       - name: Require compatibility matrix
         env:
           COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
-        run: test "$COMPATIBILITY_RESULT" = success
+          PEER_FLOOR_RESULT: ${{ needs.peer-floor.result }}
+        run: test "$COMPATIBILITY_RESULT" = success && test "$PEER_FLOOR_RESULT" = success
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:

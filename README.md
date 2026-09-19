@@ -2,7 +2,10 @@
 
 `@sessionbus/dsh` connects DSH roots to sessionbus and runs daemon-managed DSH lanes.
 It depends on the exact `@sessionbus/kit` prerelease `0.1.0-pre.3`.
-It supports DeepSeek Harness `0.1.5-rc.2` and `0.1.6-alpha.2`.
+It supports DeepSeek Harness `0.1.5-rc.2` and later; tested versions are
+`0.1.5-rc.2`, `0.1.6-alpha.1`, and `0.1.6-alpha.2`.
+A DSH profile must install every DSH package at one uniform DSH version; adding
+one prerelease package can otherwise pull newer prereleases through DSH's caret peers.
 `@sessionbus/dsh` is a pkg.pr.new preview until a separately reviewed trusted-
 publishing workflow exists; its first registry version must be published manually
 before trusted publishing can be configured.

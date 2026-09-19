@@ -23,6 +23,7 @@ jobs:
       matrix:
         dsh:
           - 0.1.5-rc.2
+          - 0.1.6-alpha.1
           - 0.1.6-alpha.2
     steps:
       - uses: actions/checkout@v7
