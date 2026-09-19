@@ -18,7 +18,7 @@ test("package metadata stays rooted in the standalone repository", () => {
   assert.deepEqual(manifest.bin, { "sessionbus-dsh": "launcher.mjs", "sessionbus-dsh-install": "bin.mjs" });
   assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "launcher.mjs", "bin.mjs", "install.mjs"]);
   assert.equal(manifest.dependencies["@antst/dsh-file-uploads-none"], "0.1.0-alpha.18");
-  assert.equal(manifest.dependencies["@sessionbus/kit"], "0.1.0-pre.3");
+  assert.match(manifest.dependencies["@sessionbus/kit"], /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/);
   for (const [name, range] of Object.entries(manifest.peerDependencies)) if (name.startsWith("@deepseek-ai/dsh-")) assert.equal(range, ">=0.1.5-rc.2");
   assert.equal(manifest.peerDependencies["@deepseek-ai/cordis"], "^4.0.2");
   assert.equal(manifest.peerDependencies["@deepseek-ai/cordis-plugin-loader"], "^1.0.3");

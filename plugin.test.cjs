@@ -6,7 +6,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const { connectPeer } = require("@sessionbus/kit");
+const { connectPeer, serveWorker } = require("@sessionbus/kit");
 const { ACTIONS, activate, apply, createRuntime, settings, terminal } = require("./plugin.cjs");
 const packageVersion = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version;
 
@@ -290,6 +290,65 @@ test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", as
     assert.deepEqual(peer.identity.groups, ["alpha", "beta"]);
   } finally {
     runtime.close();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("kit preserves spawn policy.trace through peer and lane callers", { timeout: 10000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-trace-"));
+  const socket = path.join(directory, "bus.sock");
+  const result = {
+    session_id: "spawned-session",
+    policy: { persistent: false, auto_close_ms: 60000, idle_message: "stage", notify: false, trace: "content" },
+  };
+  const hellos = [], spawns = [], streams = new Set(), laneOpened = deferred();
+  const server = net.createServer((stream) => {
+    streams.add(stream);
+    stream.on("close", () => streams.delete(stream));
+    let buffer = "";
+    stream.on("data", (chunk) => {
+      buffer += chunk;
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const frame = JSON.parse(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        if (frame.method === "session.hello") {
+          hellos.push(frame.params);
+          stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} })}\n`);
+          if (frame.params.launch_token) stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: 100, method: "session.open", params: { name: "trace-worker@fake", groups: [], open: {} } })}\n`);
+        } else if (frame.id === 100 && frame.result?.session_id) {
+          laneOpened.resolve(frame.result);
+        } else if (frame.method === "lane.spawn") {
+          spawns.push(frame.params);
+          stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result })}\n`);
+        }
+      }
+    });
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  const runtimes = [];
+  try {
+    for (const mode of ["peer", "lane"]) {
+      const ctx = new Context();
+      const native = agent(ctx);
+      const deps = dependencies(ctx);
+      deps.ambient = { SESSIONBUS_SOCKET: socket, ...(mode === "lane" ? { SESSIONBUS_LAUNCH_TOKEN: "trace-token" } : {}) };
+      if (mode === "peer") deps.connectPeer = connectPeer; else deps.serveWorker = serveWorker;
+      const runtime = createRuntime(ctx, { product: mode === "peer" ? "dashi" : "sessionbus-dsh" }, deps);
+      runtimes.push(runtime);
+      ctx.ready();
+      if (mode === "peer") await runtime.peers.get(native).peer.ready; else await laneOpened.promise;
+      assert.deepEqual(await ctx.tool.execute({ action: "spawn", arguments: { product: "dashi", name: "trace-child", open: {} } }, { agent: native }), result);
+      runtime.close();
+      if (mode === "lane") await runtime.workerExit;
+    }
+    assert.deepEqual(hellos.map((hello) => Object.hasOwn(hello, "launch_token")), [false, true]);
+    assert.deepEqual(spawns, Array(2).fill({ product: "dashi", name: "trace-child", open: {} }));
+  } finally {
+    for (const runtime of runtimes) runtime.close();
+    for (const stream of streams) stream.destroy();
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });
   }
