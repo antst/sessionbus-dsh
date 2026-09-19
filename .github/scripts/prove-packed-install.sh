@@ -126,4 +126,21 @@ for _ in $(seq 1 200); do
   sleep 0.1
 done
 if [[ "$ready" != true ]]; then cat "$work/web.stdout" "$work/web.stderr" >&2; exit 1; fi
-echo "DSH $version lane hello, web boot, dashi coexistence, and packed install: PASS"
+stop_processes
+
+for profile in sessionbus web dashi; do
+  DSH_HOME="$home" "$home/profiles/$profile/node_modules/.bin/sessionbus-dsh-install" --remove "$profile"
+done
+node --input-type=module - "$home" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+const home = process.argv[2];
+for (const profile of ["sessionbus", "web", "dashi"]) {
+  const manifest = JSON.parse(fs.readFileSync(`${home}/profiles/${profile}/package.json`, "utf8"));
+  const patch = fs.readFileSync(`${home}/profiles/${profile}/cordis.patch.yml`, "utf8");
+  assert.equal(manifest.dependencies?.["@sessionbus/dsh"], undefined);
+  assert.doesNotMatch(patch, /id:\s*sessionbus|id:\s*file-uploads-none/u);
+}
+NODE
+echo "DSH $version lane hello, web boot, dashi coexistence, packed install, and uninstall: PASS"

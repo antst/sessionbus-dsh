@@ -44,4 +44,15 @@ The daemon finds that command on `PATH`, so install this package alongside
 `dsh` at the host level too—for example, run `pnpm add @sessionbus/dsh` in the
 directory where `dsh` is installed—so both bins share one `node_modules/.bin`.
 
+Uninstall without invoking DSH by running the installed bin from the profile:
+
+```sh
+pnpm --dir "$DSH_HOME/profiles/web" exec sessionbus-dsh-install --remove web
+```
+
+When the DSH CLI works, `dsh plugin --profile web exec
+sessionbus-dsh-install --remove web` is the equivalent convenience form. The
+installer removes the package first, then strips its managed `sessionbus` and
+`file-uploads-none` rows.
+
 See [Lane without a TUI](docs/LANE-WITHOUT-TUI.md) for the daemon launch contract.

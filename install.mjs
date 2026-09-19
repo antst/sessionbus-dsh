@@ -37,6 +37,7 @@ const noUploadsPatch = `- insert:
 const sessionbusID = /(?:^\s*-\s*|[{,]\s*)['"]?id['"]?\s*:\s*['"]?sessionbus['"]?(?=\s|[,}]|$)/mu;
 const noUploadsID = /(?:^\s*-\s*|[{,]\s*)['"]?id['"]?\s*:\s*['"]?file-uploads-none['"]?(?=\s|[,}]|$)/mu;
 const productPattern = /^[a-z0-9][a-z0-9-]{0,31}$/u;
+const ownedIDs = [sessionbusID, noUploadsID];
 function writeChanged(file, body) {
   if (!existsSync(file) || readFileSync(file, "utf8") !== body) writeFileSync(file, body);
 }
@@ -92,6 +93,41 @@ function convergeSessionbus(file, product) {
   convergePatch(file, sessionbusID, peerPatch(product));
 }
 
+function withoutOwnedRows(body) {
+  const lines = body.split(/(?<=\n)/u);
+  for (let row = lines.length - 1; row >= 0; row--) {
+    const text = lines[row].replace(/\r?\n$/u, "");
+    if (!ownedIDs.some((id) => id.test(text))) continue;
+    const indent = text.match(/^\s*/u)[0].length;
+    let end = row + 1;
+    if (!text.includes("{")) {
+      while (end < lines.length) {
+        const next = lines[end].replace(/\r?\n$/u, "");
+        const nextIndent = next.match(/^\s*/u)[0].length;
+        if ((/^\s*-\s+/u.test(next) || /^\s*#/u.test(next)) && nextIndent <= indent) break;
+        end++;
+      }
+    }
+    lines.splice(row, end - row);
+  }
+  for (let row = lines.length - 1; row >= 0; row--) {
+    const match = /^(\s*)-\s+insert:\s*(?:#.*)?(?:\r?\n)?$/u.exec(lines[row]);
+    if (!match) continue;
+    let child = row + 1;
+    while (child < lines.length && /^\s*(?:#.*)?(?:\r?\n)?$/u.test(lines[child])) child++;
+    if (child === lines.length || lines[child].match(/^\s*/u)[0].length <= match[1].length) {
+      if (row > 0 && /^\s*(?:\r?\n)?$/u.test(lines[row - 1])) lines.splice(row - 1, 2);
+      else lines.splice(row, 1);
+    }
+  }
+  const result = lines.join("");
+  return result.trim() ? result : "[]\n";
+}
+
+function validProfile(name) {
+  return name && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".." && name !== "node_modules";
+}
+
 export function install(profileNames = [], options = {}) {
   const home = options.home || process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
   const root = options.root || path.dirname(fileURLToPath(import.meta.url));
@@ -101,7 +137,7 @@ export function install(profileNames = [], options = {}) {
   if (names.includes("sessionbus") && options.product !== undefined && options.product !== "sessionbus-dsh") throw new Error("the sessionbus profile product must be sessionbus-dsh");
   if (names.some((name) => name !== "sessionbus") && options.product === undefined) throw new Error("--product is required for peer profiles");
   for (const name of names) {
-    if (!name || name.includes("/") || name.includes("\\") || name === "." || name === ".." || name === "node_modules") throw new Error(`invalid profile name ${JSON.stringify(name)}`);
+    if (!validProfile(name)) throw new Error(`invalid profile name ${JSON.stringify(name)}`);
     const profile = path.join(home, "profiles", name);
     const manifestFile = path.join(profile, "package.json");
     let manifest = existsSync(manifestFile) ? JSON.parse(readFileSync(manifestFile, "utf8")) : null;
@@ -124,5 +160,19 @@ export function install(profileNames = [], options = {}) {
     };
     writeChanged(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
     writeChanged(path.join(profile, "cordis.patch.yml"), profilePatch);
+  }
+}
+
+export function remove(profileNames = [], options = {}) {
+  if (profileNames.length === 0) throw new Error("--remove requires at least one profile");
+  const home = options.home || process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+  const run = options.run || ((args, cwd) => spawnSync("pnpm", args, { cwd, encoding: "utf8" }));
+  for (const name of [...new Set(profileNames)]) {
+    if (!validProfile(name)) throw new Error(`invalid profile name ${JSON.stringify(name)}`);
+    const profile = path.join(home, "profiles", name);
+    const result = run(["remove", "@sessionbus/dsh"], profile);
+    if (result.status !== 0) throw new Error(String(result.stderr || result.error?.message || "pnpm remove failed").trim());
+    const patch = path.join(profile, "cordis.patch.yml");
+    if (existsSync(patch)) writeChanged(patch, withoutOwnedRows(readFileSync(patch, "utf8")));
   }
 }

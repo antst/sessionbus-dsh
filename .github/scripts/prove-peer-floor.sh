@@ -40,4 +40,15 @@ for (const [name, range] of Object.entries(source.peerDependencies)) {
   }
 }
 NODE
-echo "DSH $version install completed with every below-floor peer warning: PASS"
+DSH_HOME="$work/home" "$profile/node_modules/.bin/sessionbus-dsh-install" --product dsh peer-floor
+DSH_HOME="$work/home" "$profile/node_modules/.bin/sessionbus-dsh-install" --remove peer-floor
+node - "$profile" <<'NODE'
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const profile = process.argv[2]
+const manifest = JSON.parse(fs.readFileSync(`${profile}/package.json`))
+const patch = fs.readFileSync(`${profile}/cordis.patch.yml`, 'utf8')
+assert.equal(manifest.dependencies?.['@sessionbus/dsh'], undefined)
+assert.doesNotMatch(patch, /id:\s*sessionbus|id:\s*file-uploads-none/u)
+NODE
+echo "DSH $version install completed with every below-floor peer warning, then uninstalled: PASS"
