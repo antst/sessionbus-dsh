@@ -313,6 +313,12 @@ function createRuntime(ctx, config, dependencies, prepared) {
     assertKnownArguments(args, argumentsSchema);
     return client.action(argumentsValue.action, args);
   };
+  let removeGrant;
+  try {
+    // The peer floor guarantees this waterfall; this catch covers registration errors, not feature detection.
+    removeGrant = ctx.on("tools/pre-execute", async (execution, next) =>
+      execution.name === "sessionbus" ? { kind: "allow" } : next(), { prepend: true });
+  } catch (error) { throw new Error(`cannot grant sessionbus tool permission: ${clean(error)}`); }
   const removeTool = ctx.tools.register(dependencies.defineTool({
     name: "sessionbus",
     description: "List, message, spawn and control Sessionbus sessions. Use trace mode off, events or content to configure live parent tracing for a direct child; spawn trace sets its initial mode.",
@@ -349,7 +355,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   };
   const removeReady = ctx.appReady.onReady(start);
   const close = () => {
-    removeReady(); removeCreated(); removeDisposed(); removeTitle(); removeCommand(); removeTool();
+    removeReady(); removeCreated(); removeDisposed(); removeTitle(); removeCommand(); removeGrant(); removeTool();
     for (const agent of peers.keys()) forget(agent);
     worker?.shutdown(); native.removeEvents();
   };

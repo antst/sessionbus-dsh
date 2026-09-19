@@ -13,6 +13,45 @@ stop_processes() {
   dsh_pid=
   server_pid=
 }
+assert_permission_proof() {
+  node --input-type=module - "$1" "$2" "${3:-}" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+
+const [capture, root, token] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(capture, "utf8"));
+assert.equal(state.hello, true);
+assert.equal(state.listed, true);
+if (Object.hasOwn(state, "ready")) assert.equal(state.ready, true);
+if (token !== "") {
+  assert.equal(state.helloParams.launch_token, token);
+  assert.equal(Object.hasOwn(state.helloParams, "groups"), false);
+  assert.deepEqual(state.open.request.params.groups, ["lane-primary", "lane-secondary"]);
+  assert.equal(typeof state.open.response.result.session_id, "string");
+}
+const files = [];
+const walk = directory => {
+  if (!fs.existsSync(directory)) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) walk(target); else if (/session(?:\.v\d+)?\.jsonl$/u.test(entry.name)) files.push(target);
+  }
+};
+walk(root);
+const events = files.flatMap(file => fs.readFileSync(file, "utf8").trim().split("\n").slice(1).map(line => JSON.parse(line)));
+const sessionbusCall = events.find(event => event.type === "tool/call" && event.data?.name === "sessionbus");
+assert.ok(sessionbusCall);
+assert.equal(events.some(event => event.type === "tool/result" && event.data?.message?.source?.callId === sessionbusCall.data.callId), true);
+assert.equal(events.some(event => event.type === "approval/asked" && event.data?.toolName === "sessionbus"), false);
+const dummyCall = events.find(event => event.type === "tool/call" && event.data?.name === "w081_dummy");
+assert.ok(dummyCall);
+const dummyResult = events.find(event => event.type === "tool/result" && event.data?.message?.source?.callId === dummyCall.data.callId);
+assert.equal(events.filter(event => event.type === "approval/asked" && event.data?.toolName === "w081_dummy").length, 1,
+  `dummy approval mismatch: ${JSON.stringify(dummyResult)}`);
+assert.equal(events.some(event => event.type === "turn/end" && event.data?.reason?.kind === "completed"), true);
+NODE
+}
 cleanup() {
   stop_processes
   rm -rf -- "$work"
@@ -42,6 +81,21 @@ printf '%s\n' '- insert:' \
   "    - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }" \
   "    - { id: sessionbus, name: '@sessionbus/dsh' }" > "$home/profiles/dashi/cordis.patch.yml"
 DSH_HOME="$home" "$home/profiles/dashi/node_modules/.bin/sessionbus-dsh-install" --product dashi dashi
+for profile in sessionbus web dashi; do
+  if [[ "$version" = 0.1.6-alpha.1 ]]; then
+  cat > "$home/profiles/$profile/.pnpmfile.cjs" <<EOF
+const DSH_VERSION = '$version'
+const fields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
+module.exports = { hooks: { readPackage(pkg) {
+  for (const field of fields) for (const name of Object.keys(pkg[field] ?? {})) {
+    if (name.startsWith('@deepseek-ai/dsh')) pkg[field][name] = DSH_VERSION
+  }
+  return pkg
+} } }
+EOF
+  fi
+  pnpm --dir "$home/profiles/$profile" add --save-exact "@deepseek-ai/dsh-llm-replay@$version" "$root/.github/fixtures/ask-all-plugin"
+done
 
 node --input-type=module - "$home" "$version" <<'NODE'
 import assert from "node:assert/strict";
@@ -71,57 +125,45 @@ const plugin = require(`${home}/profiles/sessionbus/node_modules/@sessionbus/dsh
 console.log(JSON.stringify({ version, plugin, profiles: "PASS", packedInstall: "PASS" }));
 NODE
 
+fixture="$root/.github/fixtures/sessionbus-tool-call.jsonl"
+proof_patch="$root/.github/fixtures/sessionbus-tool-call.patch.yml"
+
 socket="$work/lane.sock"
-capture="$work/lane-hello.json"
-open_capture="$work/lane-open.json"
+capture="$work/lane-proof.json"
 token="w075-fake-$version"
-node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh "$open_capture" '["lane-primary","lane-secondary"]' &
+echo "DSH $version sessionbus lane permission proof"
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh worker &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
-PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" >"$work/lane.stdout" 2>"$work/lane.stderr" &
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/lane-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" --patch "$proof_patch" >"$work/lane.stdout" 2>"$work/lane.stderr" &
 dsh_pid=$!
-for _ in $(seq 1 200); do [[ -s "$capture" && -s "$open_capture" ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
-if [[ ! -s "$capture" || ! -s "$open_capture" ]]; then cat "$work/lane.stderr" >&2; exit 1; fi
-node --input-type=module - "$capture" "$open_capture" "$token" <<'NODE'
-import assert from "node:assert/strict";
-import fs from "node:fs";
-
-const [capture, openCapture, token] = process.argv.slice(2);
-const frame = JSON.parse(fs.readFileSync(capture, "utf8"));
-assert.equal(frame.method, "session.hello");
-assert.equal(frame.params.launch_token, token);
-assert.equal(frame.params.product, "sessionbus-dsh");
-assert.equal(Object.hasOwn(frame.params, "groups"), false);
-const opened = JSON.parse(fs.readFileSync(openCapture, "utf8"));
-assert.deepEqual(opened.request.params.groups, ["lane-primary", "lane-secondary"]);
-assert.equal(typeof opened.response.result.session_id, "string");
-NODE
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/lane.stdout" "$work/lane.stderr" >&2 2>/dev/null || true; exit 1; fi
+assert_permission_proof "$capture" "$work/lane-sessions" "$token"
 stop_processes
 
 socket="$work/dashi.sock"
-capture="$work/dashi-hello.json"
+capture="$work/dashi-proof.json"
 token="w077-dashi-$version"
-node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" dashi &
+echo "DSH $version dashi row permission proof"
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
-DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$dsh" --profile dashi >"$work/dashi.stdout" 2>"$work/dashi.stderr" &
+DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/dashi-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$dsh" --profile dashi --patch "$proof_patch" >"$work/dashi.stdout" 2>"$work/dashi.stderr" &
 dsh_pid=$!
-for _ in $(seq 1 200); do [[ -s "$capture" ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
-if [[ ! -s "$capture" ]]; then cat "$work/dashi.stderr" >&2; exit 1; fi
-node --input-type=module - "$capture" "$token" <<'NODE'
-import assert from "node:assert/strict";
-import fs from "node:fs";
-
-const [capture, token] = process.argv.slice(2);
-const frame = JSON.parse(fs.readFileSync(capture, "utf8"));
-assert.equal(frame.method, "session.hello");
-assert.equal(frame.params.launch_token, token);
-assert.equal(frame.params.product, "dashi");
-NODE
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/dashi.stdout" "$work/dashi.stderr" >&2 2>/dev/null || true; exit 1; fi
+assert_permission_proof "$capture" "$work/dashi-sessions" "$token"
 stop_processes
 
 port=$(node -e 'const net=require("node:net"),server=net.createServer(); server.listen(0,"127.0.0.1",()=>{process.stdout.write(String(server.address().port)); server.close()})')
-DSH_HOME="$home" SESSIONBUS_SOCKET="$work/peer.sock" "$dsh" --profile web --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
+socket="$work/peer.sock"
+capture="$work/web-proof.json"
+echo "DSH $version web peer permission proof"
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dsh peer &
+server_pid=$!
+for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/web-sessions" SESSIONBUS_SOCKET="$socket" "$dsh" --profile web --patch "$proof_patch" --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
 dsh_pid=$!
 ready=false
 for _ in $(seq 1 200); do
@@ -130,6 +172,33 @@ for _ in $(seq 1 200); do
   sleep 0.1
 done
 if [[ "$ready" != true ]]; then cat "$work/web.stdout" "$work/web.stderr" >&2; exit 1; fi
+for _ in $(seq 1 50); do grep -q 'dsh web: http://' "$work/web.stdout" && break; sleep 0.1; done
+launch_url=$(grep -Eo 'http://[^[:space:]]+' "$work/web.stdout" | tail -1)
+node --input-type=module - "$launch_url" <<'NODE'
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+
+const launch = process.argv[2];
+const login = await fetch(launch, { redirect: "manual" });
+assert.equal(login.status, 303);
+const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+assert.ok(cookie);
+const origin = new URL(launch).origin;
+const rpc = async (method, args) => {
+  const response = await fetch(`${origin}/api/${method}`, {
+    method: "POST", headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ type: "client-request", rpcId: crypto.randomUUID(), method, payload: { args } }),
+  });
+  const body = await response.json();
+  if (!body.result?.ok) throw new Error(`${method}: ${JSON.stringify(body)}`);
+  return body.result.value;
+};
+const created = await rpc("session/create", { request: {} });
+await rpc("session/selectModel", { request: { sessionId: created.sessionId, provider: "deepseek-official", model: "deepseek-v4-flash" } });
+await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "Call sessionbus list." }] } });
+NODE
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"listed":true' "$capture" && grep -Rq '"type":"turn/end"' "$work/web-sessions" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+assert_permission_proof "$capture" "$work/web-sessions"
 stop_processes
 
 for profile in sessionbus web dashi; do
@@ -147,4 +216,4 @@ for (const profile of ["sessionbus", "web", "dashi"]) {
   assert.doesNotMatch(patch, /id:\s*sessionbus|id:\s*file-uploads-none/u);
 }
 NODE
-echo "DSH $version lane hello without groups, daemon-group session.open success, web boot, dashi coexistence, packed install, and uninstall: PASS"
+echo "DSH $version lane, dashi, and web sessionbus tool calls without approval; packed install and uninstall: PASS"
