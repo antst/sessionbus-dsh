@@ -16,10 +16,9 @@ None of the commands below prints `SESSIONBUS_LAUNCH_TOKEN`,
 environment assignments intentionally displayed are the daemon's filtered
 `PATH=` and `SESSIONBUS_PRODUCTS=` lines.
 
-Dashi `0.1.0-alpha.19` is the release in progress; alpha.18 lacks the
-`sessionbus` profile row and the launcher token path. The other pinned
-packages below are published. Run these exact probes immediately before
-starting:
+Dashi alpha.18 lacked the `sessionbus` profile row and the launcher token
+path. The pinned packages below are published. Run these exact probes
+immediately before starting:
 
 ```sh
 npm view @antst/dashi-launcher@0.1.0-alpha.19 version && npm view @antst/dashi-app@0.1.0-alpha.19 version && npm view @antst/dsh-file-uploads-none@0.1.0-alpha.18 version
