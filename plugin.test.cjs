@@ -1,7 +1,12 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const net = require("node:net");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
+const { connectPeer } = require("@sessionbus/kit");
 const { ACTIONS, activate, apply, createRuntime, settings, terminal } = require("./plugin.cjs");
 
 function deferred() {
@@ -190,6 +195,12 @@ test("settings use config, environment, and default precedence", () => {
   assert.equal(settings(new Context(), { product: "dashi" }, { HOME: "/home/test" }).socket, "/home/test/.local/state/sessionbus/run/presence.sock");
   assert.throws(() => settings(new Context()), /re-run sessionbus-dsh-install --product/u);
   assert.throws(() => settings(new Context(), { product: "Bad_Product" }), /\^\[a-z0-9\]/u);
+  const laneContext = new Context();
+  laneContext.launchEnvironment = { get: (key) => new Map([
+    ["SESSIONBUS_LAUNCH_TOKEN", { value: "token" }],
+    ["SESSIONBUS_GROUPS", { value: "not-json" }],
+  ]).get(key) };
+  assert.deepEqual(settings(laneContext, { product: "sessionbus-dsh" }).groups, []);
 });
 
 test("launch token is scrubbed and retained only by the kit handoff", async (t) => {
@@ -213,7 +224,7 @@ test("launch token is scrubbed and retained only by the kit handoff", async (t) 
   assert.equal(JSON.stringify(runtime).includes("snapshot-secret"), false);
 });
 
-test("worker hello and fresh open map every advertised field", async () => {
+test("lane hello omits groups and session.open carrying daemon groups succeeds", async () => {
   const ctx = new Context();
   const native = agent(ctx);
   const { deps } = lane(ctx);
@@ -221,7 +232,7 @@ test("worker hello and fresh open map every advertised field", async () => {
     product: "sessionbus-dsh", version: "0.1.0-pre.1", supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
   });
   const result = await deps.callbacks.open(null, {
-    name: "parent/worker@host", groups: [], open: { cwd: "/other", permission_mode: "never", model: "vendor/model/name", reasoning_effort: "high" },
+    name: "parent/worker@host", groups: ["lane-primary", "lane-secondary"], open: { cwd: "/other", permission_mode: "never", model: "vendor/model/name", reasoning_effort: "high" },
   });
   assert.deepEqual(result, { session_id: native.id });
   assert.deepEqual(ctx.calls, [
@@ -235,6 +246,46 @@ test("worker hello and fresh open map every advertised field", async () => {
   const extra = agent(ctx, "session-extra");
   ctx.emit("agent/created", { agent: extra });
   assert.equal(deps.peers.length, 0);
+});
+
+test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-groups-"));
+  const socket = path.join(directory, "bus.sock");
+  let resolveHello, rejectHello;
+  const hello = new Promise((resolve, reject) => { resolveHello = resolve; rejectHello = reject; });
+  const server = net.createServer((stream) => {
+    let buffer = "";
+    stream.on("error", () => {});
+    stream.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const frame = JSON.parse(buffer.slice(0, newline));
+      try {
+        assert.equal(frame.method, "session.hello");
+        assert.deepEqual(frame.params.groups, ["alpha", "beta"]);
+        stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} })}\n`);
+        resolveHello(frame);
+      } catch (error) { rejectHello(error); }
+    });
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  const ctx = new Context();
+  const root = agent(ctx, "session-peer-groups");
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_SOCKET: socket, SESSIONBUS_GROUPS: '["alpha","beta"]' };
+  deps.connectPeer = connectPeer;
+  const runtime = createRuntime(ctx, { product: "dsh" }, deps);
+  try {
+    ctx.ready();
+    const peer = runtime.peers.get(root).peer;
+    await Promise.all([hello, peer.ready]);
+    assert.deepEqual(peer.identity.groups, ["alpha", "beta"]);
+  } finally {
+    runtime.close();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("resume keeps exact identity and uses the current model for effort", async () => {

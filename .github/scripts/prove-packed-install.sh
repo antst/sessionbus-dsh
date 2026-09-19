@@ -74,23 +74,28 @@ NODE
 
 socket="$work/lane.sock"
 capture="$work/lane-hello.json"
+open_capture="$work/lane-open.json"
 token="w075-fake-$version"
-node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh &
+node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh "$open_capture" '["lane-primary","lane-secondary"]' &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
-PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='["configured"]' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" >"$work/lane.stdout" 2>"$work/lane.stderr" &
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" >"$work/lane.stdout" 2>"$work/lane.stderr" &
 dsh_pid=$!
-for _ in $(seq 1 200); do [[ -s "$capture" ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
-if [[ ! -s "$capture" ]]; then cat "$work/lane.stderr" >&2; exit 1; fi
-node --input-type=module - "$capture" "$token" <<'NODE'
+for _ in $(seq 1 200); do [[ -s "$capture" && -s "$open_capture" ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" || ! -s "$open_capture" ]]; then cat "$work/lane.stderr" >&2; exit 1; fi
+node --input-type=module - "$capture" "$open_capture" "$token" <<'NODE'
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const [capture, token] = process.argv.slice(2);
+const [capture, openCapture, token] = process.argv.slice(2);
 const frame = JSON.parse(fs.readFileSync(capture, "utf8"));
 assert.equal(frame.method, "session.hello");
 assert.equal(frame.params.launch_token, token);
 assert.equal(frame.params.product, "sessionbus-dsh");
+assert.equal(Object.hasOwn(frame.params, "groups"), false);
+const opened = JSON.parse(fs.readFileSync(openCapture, "utf8"));
+assert.deepEqual(opened.request.params.groups, ["lane-primary", "lane-secondary"]);
+assert.equal(typeof opened.response.result.session_id, "string");
 NODE
 stop_processes
 
@@ -143,4 +148,4 @@ for (const profile of ["sessionbus", "web", "dashi"]) {
   assert.doesNotMatch(patch, /id:\s*sessionbus|id:\s*file-uploads-none/u);
 }
 NODE
-echo "DSH $version lane hello, web boot, dashi coexistence, packed install, and uninstall: PASS"
+echo "DSH $version lane hello without groups, daemon-group session.open success, web boot, dashi coexistence, packed install, and uninstall: PASS"
