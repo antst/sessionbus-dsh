@@ -64,7 +64,7 @@ function readConfiguration(ctx, config = {}, ambient = process.env) {
   delete process.env.SESSIONBUS_LAUNCH_TOKEN;
   const mode = token === undefined ? "peer" : "lane";
   if (config.mode !== undefined && config.mode !== mode) throw new Error(`mode ${config.mode} conflicts with launch environment`);
-  let groups = Object.hasOwn(config, "groups") ? config.groups : JSON.parse(value("SESSIONBUS_GROUPS") || "[]");
+  let groups = mode === "lane" ? [] : Object.hasOwn(config, "groups") ? config.groups : JSON.parse(value("SESSIONBUS_GROUPS") || "[]");
   if (!Array.isArray(groups) || groups.some((group) => !text(group)) || new Set(groups).size !== groups.length) throw new Error("groups are invalid");
   const socket = Object.hasOwn(config, "socket") ? config.socket : value("SESSIONBUS_SOCKET") || path.join(value("XDG_STATE_HOME") || path.join(value("HOME") || os.homedir(), ".local/state"), "sessionbus/run/presence.sock");
   const localKey = Object.hasOwn(config, "local_key") ? config.local_key : value("SESSIONBUS_LOCAL_KEY");
