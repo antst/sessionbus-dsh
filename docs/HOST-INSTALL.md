@@ -5,7 +5,7 @@ example. Run it as the ordinary account returned by `id -un`, never with
 `sudo`, and refer to its home as `$HOME` in commands. On `umka-dev1` that
 account is `antst` and its home is `/home/antst`; earlier references to `pdev`
 were wrong. The target set is DSH `0.1.5-rc.2`, dashi
-`0.1.0-alpha.19`, and `@sessionbus/dsh` `0.1.0-pre.2`. Do not continue
+`0.1.0-alpha.20`, and `@sessionbus/dsh` `0.1.0-pre.2`. Do not continue
 past a failed assertion.
 
 This runbook is the real-daemon acceptance procedure for DSH `0.1.5-rc.2`.
@@ -17,19 +17,19 @@ environment assignments intentionally displayed are the daemon's filtered
 `PATH=` and `SESSIONBUS_PRODUCTS=` lines.
 
 Dashi alpha.18 lacked the `sessionbus` profile row and the launcher token
-path. The pinned packages below are published. Run these exact probes
-immediately before starting:
+path. Alpha.19 was partially published and must not be installed. The pinned
+packages below are published. Run these exact probes immediately before starting:
 
 ```sh
-npm view @antst/dashi-launcher@0.1.0-alpha.19 version && npm view @antst/dashi-app@0.1.0-alpha.19 version && npm view @antst/dsh-file-uploads-none@0.1.0-alpha.18 version
+npm view @antst/dashi-launcher@0.1.0-alpha.20 version && npm view @antst/dashi-app@0.1.0-alpha.20 version && npm view @antst/dsh-file-uploads-none@0.1.0-alpha.18 version
 npm view @sessionbus/dsh@0.1.0-pre.2 version && npm view @sessionbus/kit@0.1.0-pre.3 version
 ```
 
 Expected output, in order:
 
 ```text
-0.1.0-alpha.19
-0.1.0-alpha.19
+0.1.0-alpha.20
+0.1.0-alpha.20
 0.1.0-alpha.18
 0.1.0-pre.2
 0.1.0-pre.3
@@ -332,31 +332,31 @@ enters the documented DSH-only repair instead of terminating the task shell.
 If `.pnpmfile.cjs` already exists or the second check fails, stop with the
 rollback copy intact.
 
-## 3. Upgrade dashi to alpha.19 in place
+## 3. Upgrade dashi to alpha.20 in place
 
 Upgrade the host launcher, then immediately re-check the host graph because a
 host-level `pnpm add` may re-resolve peers:
 
 ```sh
 cd "$DSH_INSTALL_DIR"
-pnpm add --save-exact @antst/dashi-launcher@0.1.0-alpha.19
+pnpm add --save-exact @antst/dashi-launcher@0.1.0-alpha.20
 test -x "$DASHI_BIN"
 ensure_dsh_graph "$DSH_INSTALL_DIR"
 ```
 
-Expected output reports launcher `0.1.0-alpha.19`, then a nonzero host DSH
+Expected output reports launcher `0.1.0-alpha.20`, then a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
 Upgrade the existing dashi profile rather than replacing it, and re-check that
 profile immediately after the add:
 
 ```sh
-"$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0-alpha.19
+"$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0-alpha.20
 ensure_dsh_graph "$DSH_HOME/profiles/dashi"
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @antst/dashi-app @sessionbus/dsh
 ```
 
-Expected output contains `@antst/dashi-app 0.1.0-alpha.19` and a nonzero DSH
+Expected output contains `@antst/dashi-app 0.1.0-alpha.20` and a nonzero DSH
 package count at the single version `0.1.5-rc.2`. The count `11` was observed
 in a clean rebuilt profile, but it is inventory only and is never an acceptance
 criterion. The pre-existing `@sessionbus/dsh` row remains at its old version
@@ -711,7 +711,7 @@ rm "$HELP_FILE"
 Expected output:
 
 ```text
-dashi 0.1.0-alpha.19 on DSH 0.1.5-rc.2
+dashi 0.1.0-alpha.20 on DSH 0.1.5-rc.2
 dashi help exit=0
 ```
 
