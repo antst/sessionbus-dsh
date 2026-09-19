@@ -6,6 +6,8 @@ import path from "node:path";
 import test from "node:test";
 import { install, remove } from "./install.mjs";
 
+const packageVersion = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+
 test("installer creates only the lane profile and leaves the root patch untouched", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-package-"));
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-home-"));
@@ -70,7 +72,7 @@ test("installer adds one profile-local peer row to each named profile", () => {
   for (const name of ["web", "custom"]) {
     const profile = path.join(home, "profiles", name);
     mkdirSync(profile, { recursive: true });
-    writeFileSync(path.join(profile, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+    writeFileSync(path.join(profile, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } }));
     writeFileSync(path.join(profile, "cordis.patch.yml"), "[]\n");
   }
   install(["web", "custom"], { home, root: path.resolve("."), product: "dsh", run: () => assert.fail("dependency already installed") });
@@ -85,7 +87,7 @@ test("installer preserves existing rows with quoted keys", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-native-home-"));
   const dashi = path.join(home, "profiles", "dashi");
   mkdirSync(dashi, { recursive: true });
-  writeFileSync(path.join(dashi, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+  writeFileSync(path.join(dashi, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } }));
   const patch = "- insert:\n    - { \"id\": \"sessionbus\", name: '@sessionbus/dsh', config: { groups: [native] } }\n    - { \"id\": \"file-uploads-none\", name: '@antst/dsh-file-uploads-none' }\n";
   writeFileSync(path.join(dashi, "cordis.patch.yml"), patch);
   install(["dashi"], { home, root: path.resolve("."), product: "dashi", run: () => assert.fail("dependency already installed") });
@@ -102,7 +104,7 @@ test("installer repairs a block row without changing neighboring text", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-repair-home-"));
   const web = path.join(home, "profiles", "web");
   mkdirSync(web, { recursive: true });
-  writeFileSync(path.join(web, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+  writeFileSync(path.join(web, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } }));
   writeFileSync(path.join(web, "cordis.patch.yml"), "# keep\n- insert:\n    - id: sessionbus\n      name: '@sessionbus/dsh'\n- id: neighboring-row\n  disabled: true\n");
   install(["web"], { home, product: "dsh", run: () => assert.fail("dependency already installed") });
   assert.equal(readFileSync(path.join(web, "cordis.patch.yml"), "utf8"), "# keep\n- insert:\n    - id: sessionbus\n      name: '@sessionbus/dsh'\n      config: { product: dsh }\n- id: neighboring-row\n  disabled: true\n");
@@ -122,9 +124,9 @@ test("removal never loads the plugin and preserves every other row", () => {
   const original = "# keep\n- insert:\n    - { id: keeper, name: keeper }\n";
   install(["broken"], { home, product: "dsh", run: () => {
     mkdirSync(path.join(profile, "node_modules", "@sessionbus", "dsh"), { recursive: true });
-    writeFileSync(path.join(profile, "package.json"), JSON.stringify({ private: true, dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+    writeFileSync(path.join(profile, "package.json"), JSON.stringify({ private: true, dependencies: { "@sessionbus/dsh": packageVersion } }));
     writeFileSync(path.join(profile, "cordis.patch.yml"), original);
-    writeFileSync(path.join(profile, "node_modules", "@sessionbus", "dsh", "package.json"), JSON.stringify({ name: "@sessionbus/dsh", version: "0.1.0-pre.1" }));
+    writeFileSync(path.join(profile, "node_modules", "@sessionbus", "dsh", "package.json"), JSON.stringify({ name: "@sessionbus/dsh", version: packageVersion }));
     writeFileSync(path.join(profile, "node_modules", "@sessionbus", "dsh", "plugin.cjs"), "throw new Error('unloadable')\n");
     return { status: 0 };
   } });
@@ -155,7 +157,7 @@ test("installed bin symlink runs the installer", () => {
   const bin = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-bin-"));
   const profile = path.join(home, "profiles", "sessionbus");
   mkdirSync(profile, { recursive: true });
-  writeFileSync(path.join(profile, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+  writeFileSync(path.join(profile, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } }));
   writeFileSync(path.join(profile, "cordis.patch.yml"), "[]\n");
   writeFileSync(path.join(home, "cordis.patch.yml"), "[]\n");
   const command = path.join(bin, "sessionbus-dsh-install");
