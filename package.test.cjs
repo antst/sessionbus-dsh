@@ -13,7 +13,8 @@ test("package metadata stays rooted in the standalone repository", () => {
     type: "git",
     url: "git+https://github.com/antst/sessionbus-dsh.git",
   });
-  assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "bin.mjs", "install.mjs"]);
+  assert.deepEqual(manifest.bin, { "sessionbus-dsh": "launcher.mjs", "sessionbus-dsh-install": "bin.mjs" });
+  assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "launcher.mjs", "bin.mjs", "install.mjs"]);
   assert.equal(manifest.dependencies["@antst/dsh-file-uploads-none"], "https://pkg.pr.new/antst/dashi/@antst/dsh-file-uploads-none@281f390");
   assert.equal(manifest.dependencies["@sessionbus/kit"], "0.1.0-pre.3");
   for (const [name, range] of Object.entries(manifest.peerDependencies)) if (name.startsWith("@deepseek-ai/dsh-")) assert.equal(range, ">=0.1.5-rc.2");
@@ -73,9 +74,10 @@ test("the extracted package imports and its real bin performs installation", () 
   fs.mkdirSync(peerProfile, { recursive: true });
   fs.writeFileSync(path.join(peerProfile, "package.json"), '{"dependencies":{"@sessionbus/dsh":"0.1.0-pre.1"}}\n');
   fs.writeFileSync(path.join(peerProfile, "cordis.patch.yml"), "[]\n");
-  const peer = spawnSync(process.execPath, [path.join(packageRoot, "bin.mjs"), "web"], { encoding: "utf8", env: { ...process.env, DSH_HOME: peerHome } });
+  const peer = spawnSync(process.execPath, [path.join(packageRoot, "bin.mjs"), "--product", "dsh", "web"], { encoding: "utf8", env: { ...process.env, DSH_HOME: peerHome } });
   assert.equal(peer.status, 0, peer.stderr);
   assert.match(fs.readFileSync(path.join(peerProfile, "cordis.patch.yml"), "utf8"), /id: sessionbus/u);
+  assert.match(fs.readFileSync(path.join(peerProfile, "cordis.patch.yml"), "utf8"), /product: dsh/u);
 
   const failed = spawnSync(command, [], { encoding: "utf8", env: { ...process.env, DSH_HOME: path.join(directory, "failed-home"), PATH: path.dirname(process.execPath) } });
   assert.notEqual(failed.status, 0);

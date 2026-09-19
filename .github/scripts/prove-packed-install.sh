@@ -37,9 +37,12 @@ for profile in sessionbus web dashi; do
   DSH_HOME="$home" "$dsh" plugin --profile "$profile" add "$tarball"
 done
 DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install"
-DSH_HOME="$home" "$home/profiles/web/node_modules/.bin/sessionbus-dsh-install" web
-printf '%s\n' '[{"insert":[{"id":"sessionbus","name":"@sessionbus/dsh"}]}]' > "$home/profiles/dashi/cordis.patch.yml"
-DSH_HOME="$home" "$home/profiles/dashi/node_modules/.bin/sessionbus-dsh-install" dashi
+DSH_HOME="$home" "$home/profiles/web/node_modules/.bin/sessionbus-dsh-install" --product dsh web
+printf '%s\n' '- insert:' \
+  "    - { id: workspace, name: '@deepseek-ai/dsh-workspace' }" \
+  "    - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }" \
+  "    - { id: sessionbus, name: '@sessionbus/dsh' }" > "$home/profiles/dashi/cordis.patch.yml"
+DSH_HOME="$home" "$home/profiles/dashi/node_modules/.bin/sessionbus-dsh-install" --product dashi dashi
 
 node --input-type=module - "$home" "$version" <<'NODE'
 import assert from "node:assert/strict";
@@ -53,10 +56,13 @@ const lane = readPatch("sessionbus");
 const web = readPatch("web");
 const dashi = readPatch("dashi");
 assert.match(lane, /mode: lane/u);
+assert.match(lane, /product: sessionbus-dsh/u);
 assert.match(lane, /dsh-file-uploads-none/u);
 assert.match(web, /id: sessionbus/u);
+assert.match(web, /product: dsh/u);
 assert.doesNotMatch(web, /file-uploads-none/u);
 assert.equal((dashi.match(/id: sessionbus/gu) || []).length, 1);
+assert.match(dashi, /product: dashi/u);
 assert.match(dashi, /dsh-file-uploads-none/u);
 assert.equal(fs.existsSync(`${home}/cordis.patch.yml`), false);
 for (const [name, wanted] of [["@deepseek-ai/dsh", version], ["@deepseek-ai/cordis", "4.0.2"], ["@deepseek-ai/cordis-plugin-loader", "1.0.3"]]) {
@@ -69,13 +75,35 @@ NODE
 socket="$work/lane.sock"
 capture="$work/lane-hello.json"
 token="w075-fake-$version"
-node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" &
+node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
-DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$dsh" --profile sessionbus >"$work/lane.stdout" 2>"$work/lane.stderr" &
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='["configured"]' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" >"$work/lane.stdout" 2>"$work/lane.stderr" &
 dsh_pid=$!
 for _ in $(seq 1 200); do [[ -s "$capture" ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 if [[ ! -s "$capture" ]]; then cat "$work/lane.stderr" >&2; exit 1; fi
+node --input-type=module - "$capture" "$token" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+const [capture, token] = process.argv.slice(2);
+const frame = JSON.parse(fs.readFileSync(capture, "utf8"));
+assert.equal(frame.method, "session.hello");
+assert.equal(frame.params.launch_token, token);
+assert.equal(frame.params.product, "sessionbus-dsh");
+NODE
+stop_processes
+
+socket="$work/dashi.sock"
+capture="$work/dashi-hello.json"
+token="w077-dashi-$version"
+node "$root/.github/scripts/fake-sessionbus.mjs" "$socket" "$capture" dashi &
+server_pid=$!
+for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$dsh" --profile dashi >"$work/dashi.stdout" 2>"$work/dashi.stderr" &
+dsh_pid=$!
+for _ in $(seq 1 200); do [[ -s "$capture" ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" ]]; then cat "$work/dashi.stderr" >&2; exit 1; fi
 node --input-type=module - "$capture" "$token" <<'NODE'
 import assert from "node:assert/strict";
 import fs from "node:fs";

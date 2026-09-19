@@ -4,10 +4,13 @@
   "type": "commonjs",
   "main": "plugin.cjs",
   "exports": "./plugin.cjs",
-  "bin": { "sessionbus-dsh-install": "bin.mjs" },
-  "files": ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "bin.mjs", "install.mjs"],
+  "bin": {
+    "sessionbus-dsh": "launcher.mjs",
+    "sessionbus-dsh-install": "bin.mjs"
+  },
+  "files": ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "launcher.mjs", "bin.mjs", "install.mjs"],
   "scripts": {
-    "test": "node --test plugin.test.cjs install.test.mjs package.test.cjs rename.test.mjs"
+    "test": "node --test plugin.test.cjs install.test.mjs launcher.test.mjs package.test.cjs rename.test.mjs"
   },
   "dependencies": {
     "@antst/dsh-file-uploads-none": "https://pkg.pr.new/antst/dashi/@antst/dsh-file-uploads-none@281f390",

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import net from "node:net";
 
-const [socket, capture] = process.argv.slice(2);
-if (!socket || !capture) throw new Error("usage: fake-sessionbus.mjs SOCKET CAPTURE");
+const [socket, capture, product] = process.argv.slice(2);
+if (!socket || !capture || !product) throw new Error("usage: fake-sessionbus.mjs SOCKET CAPTURE PRODUCT");
 
 const server = net.createServer((stream) => {
   let buffer = "";
@@ -14,6 +14,10 @@ const server = net.createServer((stream) => {
       const frame = JSON.parse(buffer.slice(0, newline));
       buffer = buffer.slice(newline + 1);
       if (frame.method !== "session.hello") continue;
+      if (frame.params?.product !== product) {
+        stream.end(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, error: { code: -32602, message: `launched product ${product}, got ${frame.params?.product}` } })}\n`);
+        continue;
+      }
       fs.writeFileSync(capture, `${JSON.stringify(frame)}\n`);
       stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} })}\n`);
     }

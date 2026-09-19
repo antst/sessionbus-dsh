@@ -33,6 +33,7 @@ function assertKnownArguments(value, schema, location = "arguments") {
 }
 
 const name = "sessionbus-dsh";
+const productPattern = /^[a-z0-9][a-z0-9-]{0,31}$/u;
 const inject = [
   "agents", "appReady", "appExit", "commands", "permissionPresets",
   "sessionController", "sessions", "sessionTitle", "tools",
@@ -52,6 +53,8 @@ function clean(error) {
 }
 
 function readConfiguration(ctx, config = {}, ambient = process.env) {
+  if (config.product === undefined) throw new Error("product is required; re-run sessionbus-dsh-install --product <name> <profile>");
+  if (typeof config.product !== "string" || !productPattern.test(config.product)) throw new Error("product must match ^[a-z0-9][a-z0-9-]{0,31}$");
   const launch = ctx.launchEnvironment || ctx.get?.("launchEnvironment");
   const value = (key) => {
     if (launch) return launch.get(key)?.value;
@@ -66,7 +69,7 @@ function readConfiguration(ctx, config = {}, ambient = process.env) {
   const socket = Object.hasOwn(config, "socket") ? config.socket : value("SESSIONBUS_SOCKET") || path.join(value("XDG_STATE_HOME") || path.join(value("HOME") || os.homedir(), ".local/state"), "sessionbus/run/presence.sock");
   const localKey = Object.hasOwn(config, "local_key") ? config.local_key : value("SESSIONBUS_LOCAL_KEY");
   if (!text(socket) || localKey !== undefined && !text(localKey)) throw new Error("connection settings are invalid");
-  return { settings: { mode, groups: [...groups], socket, localKey }, token };
+  return { settings: { mode, product: config.product, groups: [...groups], socket, localKey }, token };
 }
 
 function captureContext(ctx) {
@@ -255,14 +258,14 @@ class NativeSession {
   }
 }
 
-function identity(ctx, agent, groups, title) {
+function identity(ctx, agent, product, groups, title) {
   const sessionID = String(agent?.session?.id || agent?.id || "");
   const cwd = agent?.session?.header?.cwd;
   if (!text(sessionID) || !text(cwd)) throw new Error("DSH root identity is incomplete");
   const current = title === undefined ? ctx.sessionTitle.get(agent.session)?.title : title;
   const provider = agent.options?.provider;
   const model = agent.options?.model;
-  return { product: "dashi", session_id: sessionID, name: text(current) ? current : sessionID, groups: [...groups], info: { cwd, ...(text(provider) && text(model) ? { model: `${provider}/${model}` } : {}) } };
+  return { product, session_id: sessionID, name: text(current) ? current : sessionID, groups: [...groups], info: { cwd, ...(text(provider) && text(model) ? { model: `${provider}/${model}` } : {}) } };
 }
 
 function createRuntime(ctx, config, dependencies, prepared) {
@@ -281,7 +284,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   const present = (agent) => {
     if (values.mode !== "peer" || !ready || !root(agent) || peers.has(agent)) return;
     try {
-      const current = identity(ctx, agent, values.groups);
+      const current = identity(ctx, agent, values.product, values.groups);
       const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values));
       peers.set(agent, { peer, identity: current, rehello: Promise.resolve() });
     } catch (error) { warn(error); }
@@ -296,7 +299,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
       const agent = ctx.agents.get(session.id);
       const record = peers.get(agent);
       if (!record || agent.session !== session) return;
-      const next = identity(ctx, agent, values.groups, event.data.title);
+      const next = identity(ctx, agent, values.product, values.groups, event.data.title);
       record.identity = next;
       record.rehello = record.rehello.then(() => record.peer.rehello({ name: next.name, info: next.info })).catch(warn);
     }, { global: true });
@@ -328,7 +331,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
       const environment = connectionEnvironment(values, launchToken);
       launchToken = undefined;
       worker = dependencies.serveWorker({
-        hello: () => ({ product: "dashi", version, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [] }),
+        hello: () => ({ product: values.product, version, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [] }),
         open: (_cancel, request) => native.open(request),
         run: (cancel, token, input) => native.run(cancel, token, input),
         interrupt: (cancel, token) => native.interrupt(cancel, token),
