@@ -150,8 +150,8 @@ carries the calls as ordinary client-to-daemon methods on the same socket
 | Artefact | Contents |
 |---|---|
 | `sessionbus` profile `package.json` | `dsh.profile = {"bundles":["@deepseek-ai/dsh-base"],"patchReload":"startup"}`. The product owner confirmed that `dsh-headless` is a one-shot task app and cannot own a resident lane (2026-09-06, `delivery-feb6ed09b1365dbb6c33071baefe8d59`). |
-| its `cordis.patch.yml` | fixed coding-agent `system-prompt` persona; disabled `session-title-llm`; the fourth permission preset; and `{id: sessionbus, name: '@sessionbus/dsh', config: {mode: lane}}`, `session-controller`, and `workspace` rows |
-| `dashi-app` `cordis.patch.yml` | insert `{id: sessionbus, name: '@sessionbus/dsh'}` (no `config`; peer is the default) as a sibling of `dashi`/`roller` (`dashi:packages/dashi-app/cordis.patch.yml:103-107`) |
+| its `cordis.patch.yml` | fixed coding-agent `system-prompt` persona; disabled `session-title-llm`; the fourth permission preset; and `{id: sessionbus, name: '@sessionbus/dsh', config: {mode: lane, product: sessionbus-dsh}}`, `session-controller`, and `workspace` rows |
+| `dashi-app` `cordis.patch.yml` | insert `{id: sessionbus, name: '@sessionbus/dsh', config: {product: dashi}}` as a sibling of `dashi`/`roller` (`dashi:packages/dashi-app/cordis.patch.yml:103-107`) |
 
 Patch rows are `{id, name, config?, disabled?, inject?}`; composition is bundle
 patches, then the profile's own, then `--patch` overlays
@@ -181,24 +181,25 @@ section (2026-09-06, `delivery-feb6ed09b1365dbb6c33071baefe8d59`).
 `dashi-app` already inserts `session-controller` (`:85-86`) and `workspace`
 (`:82-83`), so peer mode needs no extra rows.
 
-### What dashi must change
+### Product-owned launchers
 
-There is **no `--lane` flag** (owner ruling). The daemon execs `dashi` with an
-empty argv and `SESSIONBUS_LAUNCH_TOKEN` in the environment; that token is
-the sole lane signal at both layers.
+There is **no `--lane` flag** (owner ruling). The daemon launches the command
+registered for the exact hello product. `@sessionbus/dsh` therefore owns a
+`sessionbus-dsh` bin: with `SESSIONBUS_LAUNCH_TOKEN` it selects `--profile
+sessionbus`, otherwise it forwards argv to `dsh` unchanged. The dashi product
+continues to use dashi's launcher; its separate token path is proved in dashi.
 
 | Change | Where | Size |
 |---|---|---|
-| token present in `process.env` → spawn `--profile sessionbus`, else `--profile dashi` (unchanged) | `dashi:packages/dashi-launcher/bin/dashi.js:4` | ~4 lines |
-| `-g/--group` (repeatable, comma-splitting) → `SESSIONBUS_GROUPS` as a JSON array string in the child env; the flag and its value are removed from argv | same file | ~8 lines |
+| token present in `process.env` → spawn `--profile sessionbus`, else forward unchanged | `@sessionbus/dsh` package bin `sessionbus-dsh` | ~20 lines |
+| token present → select dashi's lane profile; `-g/--group` becomes `SESSIONBUS_GROUPS` | `dashi:packages/dashi-launcher/bin/dashi.js` | W-036 |
 | exact pin + patch row | `dashi:packages/dashi-app/package.json:32-45`, `cordis.patch.yml` | 2 lines |
 | README paragraph on presence, groups, title-as-name | per W-036 | ~10 lines |
 | D-036 amended (see §7.1) | `dashi:LEDGER.md:429-441` | ledger |
 
-Everything else is forwarded untouched, the token env inherited unchanged (the
-kit scrubs it inside DSH, as §3.1:920-924); the launcher stays 23 → ~35 lines
-with zero state. A stale exported token plus an interactive `dashi` yields
-headless lane mode and a loud `invalid_hello`; no heuristic guards that.
+Everything else is forwarded untouched and the token environment is inherited
+unchanged (the kit scrubs it inside DSH, as §3.1:920-924). Each profile row owns
+one stable product; a missing product fails with the installer repair command.
 
 ---
 
@@ -269,7 +270,7 @@ reconnects (as §3.2:941-942).
 | 7 | `model` is one opaque product-native string (as §1.1, §3.1:911-914) | `selectModel` takes `sessionId`, `provider` **and** `model`, plus optional `reasoningEffort` (`dsh:packages/api/session-controller/src/index.ts:245`; `types.ts:269`), and it **also persists the deployment default** via `agentDefaultModel.saveSelection` (`dsh:packages/api/session-controller/src/commands.ts:119-145`); rc.1 has no session-only selection (dashi W-025) | Two differences: shape — the wire's one string must be spelled `provider/model` and split by the plugin, a bare model fails as `unsupported value model=<v>`; and scope — an `open` with `model` moves the host's default for every later session in that `$DSH_HOME`. State both in hello's field docs; a session-only selection is a queued DSH upstream ask. |
 | 8 | `permission_mode` is an opaque string the product validates | `permissionPresets.names` reflects the `permission` row's config (`dsh:packages/interaction/permission-presets/src/index.ts:279-282`); base ships three presets (`dsh:packages/bundle/base/cordis.patch.yml:235-247`), the lane profile adds a fourth | Conformant but profile-dependent: the same product token advertises different valid values under different profiles. `lane.describe` cannot see that. |
 | 9 | `closeBound = 10 s` covers interrupt + terminal + native close (as §1.1, §3.2) | `agent.whenIdle()` has no bound and "follows both the task and any waking work released behind it" (`dsh:packages/core/agent/src/runtime-types.ts:99,105-106`) | No DSH primitive bounds idling. A slow hook or `runMaintenance` task exceeds 10 s → daemon KILL, `last_turn` unchanged. The plugin must **not** add a timer (rules 3–4); state the exposure instead. |
-| 10 | The design text execs `<product> --lane` (as §1.1:164, §2.1:425, §2.3:516,530,558, §3.4:1014, §5.3:1248, §5.5:1293) | The owner ruling removes `--lane` entirely: the daemon execs `dashi` with empty argv and lane mode is derived from `SESSIONBUS_LAUNCH_TOKEN` | Not a DSH gap — a signed-design text that the ruling supersedes in eight places, including the `lane.describe` probe and the W-DSH conformance cell. The DSH side is unaffected either way (the plugin reads env, never argv), but §5.5's `W-DSH: … against dashi --lane` must be respelled before it is run. |
+| 10 | The design text execs `<product> --lane` (as §1.1:164, §2.1:425, §2.3:516,530,558, §3.4:1014, §5.3:1248, §5.5:1293) | The owner ruling removes `--lane` entirely: the daemon execs the product-owned command with empty argv and lane mode is derived from `SESSIONBUS_LAUNCH_TOKEN` | Not a DSH gap — `sessionbus-dsh` selects its profile, while dashi owns its separate launcher path; the plugin reads env, never argv. |
 | 11 | Package identity | as §3.4:1044 says the row's `name` is `@sessionbus/dsh`; as §3.5:1080-1082 says `integrations/dsh/comms` "remains under its current package identity", i.e. `@sessionbus/dsh-comms` (`as:integrations/dsh/comms/package.json:2`) | Internal contradiction in the signed design. dashi must pin whichever name the patch row carries. See §7.6. |
 
 ---
@@ -324,11 +325,11 @@ adopted.
 
 ## 7. Open questions, with recommended answers
 
-**7.1 The launcher and `-g` (ruled; D-036 to be amended).**
+**7.1 The launchers and `-g` (ruled; D-036 to be amended).**
 D-036 (`dashi:LEDGER.md:429-441`) made the launcher a plain forwarder and
 mapped `-g` to a native `/sessionbus group <g>` command at startup. The
 owner's boot-layer ruling supersedes it: the plugin never reads argv, `-g`
-lands in `SESSIONBUS_GROUPS`, and the launch token selects the profile.
+lands in `SESSIONBUS_GROUPS`, and each product's launcher selects its profile.
 *Applied as:* the launcher gains exactly one env read (the token → `--profile
 sessionbus`) and one flag parse (`-g/--group`, repeatable and
 comma-splitting, consumed into `SESSIONBUS_GROUPS` as a JSON array),
@@ -340,7 +341,9 @@ works there because the plugin reads the token itself, but the operator must
 spell `--profile sessionbus` by hand. The startup `/sessionbus group`
 call from D-036 is dropped; groups have exactly one source, the environment,
 and `/sessionbus` (7.4) reports them. Recorded as the smallest change; no
-further decision needed.
+further decision needed. The standalone lane uses the package-owned
+`sessionbus-dsh` bin and the `sessionbus-dsh` product; it does not reuse dashi's
+launcher or product identity.
 
 **7.2 Does `dashi-app` ship the plugin in peer mode by default?**
 *Recommendation: yes*, per D-036/W-036, gated on the no-daemon evidence

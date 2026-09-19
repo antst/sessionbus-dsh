@@ -25,13 +25,23 @@ dsh plugin --profile sessionbus add @sessionbus/dsh && dsh plugin --profile sess
 Add the peer plugin to another profile, such as `web`, with:
 
 ```sh
-dsh plugin --profile web add @sessionbus/dsh && dsh plugin --profile web exec sessionbus-dsh-install web
+dsh plugin --profile web add @sessionbus/dsh && dsh plugin --profile web exec sessionbus-dsh-install --product dsh web
 ```
 
 The installer writes only profile-local rows and leaves an existing
-`sessionbus` row, such as dashi's, unchanged. With no profile arguments it
-configures only the `sessionbus` lane profile.
+`sessionbus` row's other fields unchanged while adding or updating its required
+`product`. With no profile arguments it configures only the `sessionbus` lane
+profile and derives product `sessionbus-dsh`. Use product `dashi` for the dashi
+profile, `dsh` for a standalone web or custom peer profile, or another stable
+operator-chosen identifier matching `^[a-z0-9][a-z0-9-]{0,31}$`.
 Non-web profiles also receive the no-upload provider required by DSH's Session
 Controller; ordinary text prompts work while file-upload receipts are rejected.
+
+Register the daemon's `sessionbus-dsh` product command as the package's
+`sessionbus-dsh` bin. With a launch token it selects the installed `sessionbus`
+profile; without one it forwards arguments to `dsh` unchanged.
+The daemon finds that command on `PATH`, so install this package alongside
+`dsh` at the host level too—for example, run `pnpm add @sessionbus/dsh` in the
+directory where `dsh` is installed—so both bins share one `node_modules/.bin`.
 
 See [Lane without a TUI](docs/LANE-WITHOUT-TUI.md) for the daemon launch contract.

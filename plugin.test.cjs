@@ -52,7 +52,7 @@ class Context {
 test("short print lifecycle disposes before imports without plugin output", async () => {
   const ctx = new Context();
   const llm = deferred(), tools = deferred(), output = [];
-  apply(ctx, {}, {
+  apply(ctx, { product: "dashi" }, {
     ambient: {},
     stderr: (line) => output.push(line),
     importLLM: () => llm.promise,
@@ -67,6 +67,15 @@ test("short print lifecycle disposes before imports without plugin output", asyn
   assert.deepEqual(ctx.exits, []);
   assert.equal(ctx.tool, undefined);
   assert.equal(ctx.command, undefined);
+});
+
+test("a row without product fails once with the installer fix", () => {
+  const ctx = new Context();
+  const output = [];
+  apply(ctx, {}, { stderr: (line) => output.push(line) });
+  assert.deepEqual(output, ["sessionbus: product is required; re-run sessionbus-dsh-install --product <name> <profile>\n"]);
+  assert.deepEqual(ctx.exits, [1]);
+  assert.equal(ctx.tool, undefined);
 });
 
 function agent(ctx, id = "session-fresh") {
@@ -131,7 +140,7 @@ function dependencies(ctx) {
 function lane(ctx, config = {}) {
   const deps = dependencies(ctx);
   deps.ambient = { SESSIONBUS_LAUNCH_TOKEN: "token", SESSIONBUS_SOCKET: "/run/sessionbus.sock" };
-  const runtime = createRuntime(ctx, config, deps);
+  const runtime = createRuntime(ctx, { product: "sessionbus-dsh", ...config }, deps);
   ctx.ready();
   return { deps, runtime };
 }
@@ -172,13 +181,15 @@ test("settings use config, environment, and default precedence", () => {
     ["SESSIONBUS_LOCAL_KEY", { value: "env-key" }],
   ]);
   ctx.launchEnvironment = { get: (key) => launch.get(key) };
-  assert.deepEqual(settings(ctx, { groups: ["config"], socket: "/config.sock", local_key: "config-key" }), {
-    mode: "peer", groups: ["config"], socket: "/config.sock", localKey: "config-key",
+  assert.deepEqual(settings(ctx, { product: "dashi", groups: ["config"], socket: "/config.sock", local_key: "config-key" }), {
+    mode: "peer", product: "dashi", groups: ["config"], socket: "/config.sock", localKey: "config-key",
   });
-  assert.deepEqual(settings(ctx), { mode: "peer", groups: ["env"], socket: "/env.sock", localKey: "env-key" });
-  assert.throws(() => settings(ctx, { mode: "lane" }), /conflicts/);
-  assert.throws(() => settings(new Context(), { groups: ["same", "same"] }, { HOME: "/home/test" }), /groups/);
-  assert.equal(settings(new Context(), {}, { HOME: "/home/test" }).socket, "/home/test/.local/state/sessionbus/run/presence.sock");
+  assert.deepEqual(settings(ctx, { product: "dsh" }), { mode: "peer", product: "dsh", groups: ["env"], socket: "/env.sock", localKey: "env-key" });
+  assert.throws(() => settings(ctx, { product: "dashi", mode: "lane" }), /conflicts/);
+  assert.throws(() => settings(new Context(), { product: "dashi", groups: ["same", "same"] }, { HOME: "/home/test" }), /groups/);
+  assert.equal(settings(new Context(), { product: "dashi" }, { HOME: "/home/test" }).socket, "/home/test/.local/state/sessionbus/run/presence.sock");
+  assert.throws(() => settings(new Context()), /re-run sessionbus-dsh-install --product/u);
+  assert.throws(() => settings(new Context(), { product: "Bad_Product" }), /\^\[a-z0-9\]/u);
 });
 
 test("launch token is scrubbed and retained only by the kit handoff", async (t) => {
@@ -191,7 +202,7 @@ test("launch token is scrubbed and retained only by the kit handoff", async (t) 
   const launch = new Map([["SESSIONBUS_LAUNCH_TOKEN", { value: "snapshot-secret" }], ["SESSIONBUS_SOCKET", { value: "/run/sessionbus.sock" }]]);
   ctx.launchEnvironment = { get: (key) => launch.get(key) };
   const deps = dependencies(ctx);
-  const activating = activate(ctx, {}, deps);
+  const activating = activate(ctx, { product: "sessionbus-dsh" }, deps);
   assert.equal(process.env.SESSIONBUS_LAUNCH_TOKEN, undefined);
   const runtime = await activating;
   assert.equal(Object.hasOwn(runtime.settings, "token"), false);
@@ -207,7 +218,7 @@ test("worker hello and fresh open map every advertised field", async () => {
   const native = agent(ctx);
   const { deps } = lane(ctx);
   assert.deepEqual(deps.callbacks.hello(), {
-    product: "dashi", version: "0.1.0-pre.1", supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
+    product: "sessionbus-dsh", version: "0.1.0-pre.1", supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
   });
   const result = await deps.callbacks.open(null, {
     name: "parent/worker@host", groups: [], open: { cwd: "/other", permission_mode: "never", model: "vendor/model/name", reasoning_effort: "high" },
@@ -414,7 +425,7 @@ test("peer mode tracks roots, re-hellos titles, and binds tools to the executing
   ctx.titles.set(one.session, { title: "Original" });
   const deps = dependencies(ctx);
   deps.ambient = { SESSIONBUS_SOCKET: "/run/sessionbus.sock", SESSIONBUS_GROUPS: '["team"]' };
-  const runtime = createRuntime(ctx, {}, deps);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
   assert.equal(deps.peers.length, 0);
   ctx.ready();
   assert.equal(deps.peers.length, 1);
@@ -437,7 +448,7 @@ test("disable then enable leaves one connection and one registration", () => {
   const ctx = new Context();
   agent(ctx, "session-one");
   const first = dependencies(ctx);
-  createRuntime(ctx, {}, first);
+  createRuntime(ctx, { product: "dashi" }, first);
   ctx.ready();
   assert.equal(first.peers.length, 1);
   ctx.dispose();
@@ -446,7 +457,7 @@ test("disable then enable leaves one connection and one registration", () => {
   assert.equal(ctx.command, undefined);
 
   const second = dependencies(ctx);
-  const runtime = createRuntime(ctx, {}, second);
+  const runtime = createRuntime(ctx, { product: "dashi" }, second);
   ctx.ready();
   ctx.emit("agent/created", { agent: ctx.roots[0] });
   assert.equal(second.peers.length, 1);
@@ -467,7 +478,7 @@ test("peer title re-hellos are serialized and finish on the newest title", async
     shutdown() {},
     async rehello(next) { const position = titles.push(next.name) - 1; await acknowledgements[position].promise; this.identity = { ...this.identity, ...next }; },
   });
-  const runtime = createRuntime(ctx, {}, deps);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
   ctx.ready();
   ctx.emit("session/event", one.session, { type: "session/title", data: { title: "First" } });
   ctx.emit("session/event", one.session, { type: "session/title", data: { title: "Newest" } });
@@ -482,7 +493,7 @@ test("peer title re-hellos are serialized and finish on the newest title", async
 
 test("native tool arguments expose the exact closed MCP union", () => {
   const ctx = new Context();
-  createRuntime(ctx, {}, dependencies(ctx));
+  createRuntime(ctx, { product: "dashi" }, dependencies(ctx));
   assert.deepEqual(ACTIONS, ["list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"]);
   assert.match(ctx.tool.description, /trace mode off, events or content/u);
   assert.deepEqual(ctx.tool.parameters, {
@@ -521,7 +532,7 @@ for (const mode of ["peer", "lane"]) {
       const ctx = new Context();
       const native = agent(ctx);
       const deps = dependencies(ctx);
-      const runtime = createRuntime(ctx, {}, deps);
+      const runtime = createRuntime(ctx, { product: "dashi" }, deps);
       ctx.ready();
       return { ctx, native, deps, runtime };
     })();
