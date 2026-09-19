@@ -83,9 +83,10 @@ Inventory the one host install and every profile before changing them:
 printf '%s\n' 'home direct packages:'
 pnpm --dir "$HOME" list --depth 0 @deepseek-ai/dsh @antst/dashi-launcher @sessionbus/dsh || true
 printf '%s\n' 'profiles:'
-find "$DSH_HOME/profiles" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | LC_ALL=C sort || true
+find "$DSH_HOME/profiles" -mindepth 1 -maxdepth 1 -type d ! -name node_modules -printf '%f\n' 2>/dev/null | LC_ALL=C sort || true
 for profile_dir in "$DSH_HOME"/profiles/*; do
   [ -d "$profile_dir" ] || continue
+  [ "${profile_dir##*/}" = node_modules ] && continue
   printf '\nprofile %s direct packages:\n' "${profile_dir##*/}"
   pnpm --dir "$profile_dir" list --depth 0 @deepseek-ai/dsh @antst/dashi-app @sessionbus/dsh || true
 done
@@ -115,6 +116,7 @@ mapfile -t DSH_INSTALL_LOCATIONS < <({
     dirname "$global_modules"
   fi
   for profile_dir in "$DSH_HOME"/profiles/*; do
+    [ "${profile_dir##*/}" = node_modules ] && continue
     if [ -f "$profile_dir/node_modules/@deepseek-ai/dsh/package.json" ]; then
       printf '%s\n' "$profile_dir"
     fi
@@ -142,23 +144,24 @@ DSH_INSTALL_DIR selected
 If an assertion fails, stop and report the inventory. Do not translate the
 commands below into `pnpm --global`.
 
-Inventory the running daemon without restarting it. Its recorded working
-directory becomes the lane proof's `open.cwd`; do not substitute a guessed
-home directory. Read effective PATH only from the running process, and redact
-the unit's possible PATH authorities rather than printing their contents:
+Inventory the running daemon without restarting it. The lane proof uses the
+inventory-confirmed `$HOME/e2e-work`, not the user service process's cwd (which
+may be `/`). Read effective PATH only from the running process, and redact the
+unit's possible PATH authorities rather than printing their contents:
 
 ```sh
 SESSIONBUS_UNIT=sessionbus.service
 SESSIONBUS_PID=$(systemctl --user show "$SESSIONBUS_UNIT" -p MainPID --value)
 test "$SESSIONBUS_PID" -gt 0
-DAEMON_CWD=$(readlink -f "/proc/$SESSIONBUS_PID/cwd")
+LANE_CWD="$HOME/e2e-work"
+test -d "$LANE_CWD"
 SERVICE_PATH_LINE=$(tr '\0' '\n' < "/proc/$SESSIONBUS_PID/environ" | grep '^PATH=')
 test "$(printf '%s\n' "$SERVICE_PATH_LINE" | wc -l)" -eq 1
 SERVICE_PATH=${SERVICE_PATH_LINE#PATH=}
 SERVICE_UNIT_PATH=$(systemctl --user show "$SESSIONBUS_UNIT" -p FragmentPath --value)
 SESSIONBUS_SERVICE_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/sessionbus/service.env"
 SERVICE_DROPIN="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/sessionbus.service.d/override.conf"
-printf 'daemon cwd=%s\n%s\nunit=%s\n' "$DAEMON_CWD" "$SERVICE_PATH_LINE" "$SERVICE_UNIT_PATH"
+printf 'lane cwd=%s\n%s\nunit=%s\n' "$LANE_CWD" "$SERVICE_PATH_LINE" "$SERVICE_UNIT_PATH"
 PATH="$SERVICE_PATH" command -v sessionbus
 if PATH="$SERVICE_PATH" command -v sessionbus-dsh dsh >/dev/null 2>&1; then
   printf '%s\n' 'service PATH already resolves sessionbus-dsh and dsh'
@@ -176,6 +179,7 @@ one products assignment containing `dashi` but not `sessionbus-dsh`, and an
 active service:
 
 ```text
+lane cwd=/home/antst/e2e-work
 PATH=/home/antst/.local/bin:/usr/local/bin:/usr/bin:/bin
 /home/antst/.local/bin/sessionbus
 service PATH does not resolve sessionbus-dsh and dsh
@@ -431,17 +435,24 @@ web profile has no configured groups
 On the measured umka-dev1 layout, the service's current PATH lacks
 `$HOME/node_modules/.bin`, its EnvironmentFile does not set PATH, and no
 drop-in exists. Add that directory ahead of the existing effective PATH with
-`systemctl --user edit`. Separately, inspect the single products assignment's
-quoting and append `sessionbus-dsh` inside that assignment only. The script
-preserves every other byte and the existing file inode, owner, and mode. It
-rejects multiple lines, mismatched quotes, or product text outside the allowed
-identifier grammar.
+a direct controlled write of the already-backed-up owned drop-in. Separately,
+inspect the single products assignment's quoting and append `sessionbus-dsh`
+inside that assignment only. The script preserves every other byte and the
+existing file inode, owner, and mode. It rejects multiple lines, mismatched
+quotes, or product text outside the allowed identifier grammar.
 
 ```sh
 grep '^SESSIONBUS_PRODUCTS=' "$SESSIONBUS_SERVICE_ENV"
 case ":$SERVICE_PATH:" in
   *":$HOST_BIN_DIR:"*) printf '%s\n' 'service PATH already contains host bin' ;;
-  *) printf '[Service]\nEnvironment="PATH=%s:%s"\n' "$HOST_BIN_DIR" "$SERVICE_PATH" | SYSTEMD_EDITOR=tee systemctl --user edit --drop-in=override.conf "$SESSIONBUS_UNIT" >/dev/null ;;
+  *)
+    mkdir -p "$(dirname "$SERVICE_DROPIN")"
+    cat >"$SERVICE_DROPIN" <<EOF
+[Service]
+Environment="PATH=$HOST_BIN_DIR:$SERVICE_PATH"
+EOF
+    chmod 0644 "$SERVICE_DROPIN"
+    ;;
 esac
 node --input-type=module - "$SESSIONBUS_SERVICE_ENV" <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs'
@@ -473,10 +484,8 @@ systemctl --user restart "$SESSIONBUS_UNIT"
 systemctl --user is-active "$SESSIONBUS_UNIT"
 SESSIONBUS_PID=$(systemctl --user show "$SESSIONBUS_UNIT" -p MainPID --value)
 test "$SESSIONBUS_PID" -gt 0
-DAEMON_CWD=$(readlink -f "/proc/$SESSIONBUS_PID/cwd")
 SERVICE_PATH_LINE=$(tr '\0' '\n' < "/proc/$SESSIONBUS_PID/environ" | grep '^PATH=')
 SERVICE_PATH=${SERVICE_PATH_LINE#PATH=}
-printf 'daemon cwd=%s\n' "$DAEMON_CWD"
 printf '%s\n' "$SERVICE_PATH_LINE"
 PATH="$SERVICE_PATH" command -v sessionbus-dsh dsh
 sessionbus roster --local --json | node --input-type=module -e '
@@ -493,7 +502,6 @@ are:
 
 ```text
 active
-daemon cwd=<recorded path>
 PATH=/home/antst/node_modules/.bin:/home/antst/.local/bin:/usr/local/bin:/usr/bin:/bin
 /home/antst/node_modules/.bin/sessionbus-dsh
 /home/antst/node_modules/.bin/dsh
@@ -521,28 +529,37 @@ In the umka-dev1 task shell, record the daemon's current direct children before
 the spawn:
 
 ```sh
-DAEMON_CHILDREN_BEFORE=$(pgrep -P "$SESSIONBUS_PID" | LC_ALL=C sort -n || true)
+DAEMON_CHILDREN_BEFORE_RAW="$ROLLBACK_ROOT/daemon-children-before.raw"
+DAEMON_CHILDREN_BEFORE="$ROLLBACK_ROOT/daemon-children-before"
+pgrep_status=0
+pgrep -P "$SESSIONBUS_PID" >"$DAEMON_CHILDREN_BEFORE_RAW" || pgrep_status=$?
+test "$pgrep_status" -le 1
+sed '/^$/d' "$DAEMON_CHILDREN_BEFORE_RAW" >"$DAEMON_CHILDREN_BEFORE.filtered"
+LC_ALL=C sort "$DAEMON_CHILDREN_BEFORE.filtered" >"$DAEMON_CHILDREN_BEFORE"
 printf '%s\n' 'daemon child baseline recorded'
 ```
 
 Expected output is `daemon child baseline recorded`; child IDs are retained in
 the shell and not printed.
 
-From the remote peer, make the spawn and run calls below. Replace
-`DAEMON_RECORDED_CWD` only with the exact `$DAEMON_CWD` printed during
-preflight; replace returned IDs only after successful calls:
+From the remote peer, make the spawn and run calls below. Replace `LANE_CWD`
+only with the exact `$LANE_CWD` printed during preflight
+(`/home/antst/e2e-work` on umka-dev1); replace returned IDs only after
+successful calls:
 
 ```json
-{"action":"spawn","arguments":{"product":"sessionbus-dsh","host":"umka-dev1","name":"umka-dev1-lane-check","open":{"cwd":"DAEMON_RECORDED_CWD"},"extra_groups":["peer-dev"],"persistent":false,"auto_close_ms":0,"idle_message":"stage"}}
+{"action":"spawn","arguments":{"product":"sessionbus-dsh","host":"umka-dev1","name":"umka-dev1-lane-check","open":{"cwd":"LANE_CWD"},"extra_groups":["peer-dev"],"persistent":false,"auto_close_ms":0,"idle_message":"stage"}}
 {"action":"run","arguments":{"session_id":"RETURNED_SESSION_ID","input":"Reply with exactly: lane hello"}}
 ```
 
 Expected spawn result: a new session ID with host suffix `@umka-dev1`.
 Expected run handling depends on the complete retained record:
 
-- `state: done` is PASS only when `outcome: completed`, the native reason is
-  successful, and the result is exactly `lane hello`. A `done` record with a
-  failed or interrupted outcome is recorded and acknowledged, but is not PASS.
+- `state: done` is PASS only when `result.outcome: completed` and
+  `result.result` is exactly `lane hello`. Record
+  `result.native_stop_reason` when that optional field is present. A `done`
+  record with a failed or interrupted `result.outcome` is recorded and
+  acknowledged, but is not PASS.
 - `state: unavailable` is recorded with its reason and acknowledged, but is
   not PASS and does not establish a native terminal.
 - `state: running` is never acknowledged. Use `status` or one bounded `wait`
@@ -552,21 +569,35 @@ While the lane is open, identify the one new process owned directly by the
 daemon and retain its PID for the close proof:
 
 ```sh
-mapfile -t DAEMON_CHILDREN_AFTER < <(pgrep -P "$SESSIONBUS_PID" | LC_ALL=C sort -n || true)
-mapfile -t NEW_LANE_PIDS < <(comm -13 <(printf '%s\n' "$DAEMON_CHILDREN_BEFORE") <(printf '%s\n' "${DAEMON_CHILDREN_AFTER[@]}") | sed '/^$/d')
-test "${#NEW_LANE_PIDS[@]}" -eq 1
-LANE_PID=${NEW_LANE_PIDS[0]}
-test -d "/proc/$LANE_PID"
-printf '%s\n' 'one daemon-owned lane process recorded'
+DAEMON_CHILDREN_AFTER_RAW="$ROLLBACK_ROOT/daemon-children-after.raw"
+DAEMON_CHILDREN_AFTER="$ROLLBACK_ROOT/daemon-children-after"
+NEW_LANE_PIDS_FILE="$ROLLBACK_ROOT/new-lane-pids"
+pgrep_status=0
+pgrep -P "$SESSIONBUS_PID" >"$DAEMON_CHILDREN_AFTER_RAW" || pgrep_status=$?
+test "$pgrep_status" -le 1
+sed '/^$/d' "$DAEMON_CHILDREN_AFTER_RAW" >"$DAEMON_CHILDREN_AFTER.filtered"
+LC_ALL=C sort "$DAEMON_CHILDREN_AFTER.filtered" >"$DAEMON_CHILDREN_AFTER"
+LC_ALL=C comm -13 "$DAEMON_CHILDREN_BEFORE" "$DAEMON_CHILDREN_AFTER" >"$NEW_LANE_PIDS_FILE"
+mapfile -t NEW_LANE_PIDS <"$NEW_LANE_PIDS_FILE"
+if [ "${#NEW_LANE_PIDS[@]}" -eq 1 ]; then
+  LANE_PID=${NEW_LANE_PIDS[0]}
+  test -d "/proc/$LANE_PID"
+  printf '%s\n' 'one daemon-owned lane process recorded'
+else
+  LANE_PID=
+  printf '%s\n' 'lane process attribution is ambiguous' >&2
+fi
 ```
 
 Expected output is `one daemon-owned lane process recorded`. If other daemon
-launches race this check, stop and repeat the disposable proof in an isolated
-window; do not guess which process belongs to the lane.
+launches race this check, retain the ambiguity, collect and acknowledge the
+existing terminal record, close and forget this already-created lane, verify
+its Sessionbus cleanup, and report that native-process attribution was not
+proved. Do not create another lane or replay the run.
 
-After recording the terminal state, outcome, native reason, and result, ack
-the terminal record. Then close and forget the disposable lane with the single
-public close call:
+After recording the terminal state, `result.outcome`, optional
+`result.native_stop_reason`, and `result.result`, ack the terminal record. Then
+close and forget the disposable lane with the single public close call:
 
 ```json
 {"action":"ack","arguments":{"session_id":"RETURNED_SESSION_ID","run_id":"RETURNED_RUN_ID"}}
@@ -575,9 +606,10 @@ public close call:
 ```
 
 Expected results: `ack` consumes the already-inspected terminal record,
-`close` succeeds, and `list` returns no row for that exact session ID,
-including no retained or offline row. `forget` removes the Sessionbus lane
-record; it does not delete DSH's native session history.
+`close` succeeds, and `list` returns RPC error `unknown_session` with code
+`-32001` (daemon `handlers.go:133-143`). `forget` removes the Sessionbus lane
+record; it does not delete DSH's native session history. The all-rows check
+below independently proves that no retained or offline row remains.
 
 Back in the umka-dev1 task shell, also prove that the owned native process is
 gone and that the daemon's all-rows roster has no forgotten row. Substitute
@@ -585,22 +617,31 @@ only the returned canonical session ID:
 
 ```sh
 CLOSED_SESSION_ID='RETURNED_SESSION_ID'
-test ! -e "/proc/$LANE_PID"
+if [ -n "${LANE_PID:-}" ]; then
+  test ! -e "/proc/$LANE_PID"
+else
+  printf '%s\n' 'native process cleanup not attributable; report PID ambiguity' >&2
+fi
 sessionbus roster --all --json | node --input-type=module -e '
   let body = ""; for await (const chunk of process.stdin) body += chunk
   const target = process.argv[1]
   const roster = JSON.parse(body)
   const rows = [...(roster.local?.sessions ?? []), ...(roster.remote ?? []).flatMap(host => host.sessions ?? [])]
   if (rows.some(row => row.session_id === target)) throw new Error(`forgotten session remains: ${target}`)
-  console.log("forgotten row absent and native process gone")
+  console.log("forgotten row absent")
 ' "$CLOSED_SESSION_ID"
 ```
 
 Expected output:
 
 ```text
-forgotten row absent and native process gone
+forgotten row absent
 ```
+
+When one PID was attributed, the silent `/proc` assertion also proves that
+native process is gone. When attribution was ambiguous, the roster cleanup is
+still proved, but the native-process check remains an explicitly reported
+uncertainty.
 
 ### Plain DSH peer: environment groups and a real reply
 
