@@ -4,6 +4,7 @@ set -euo pipefail
 version=${1:?pass the DSH version}
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/sessionbus-dsh-proof.XXXXXX")
+export PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=false
 server_pid=
 dsh_pid=
 
@@ -23,7 +24,10 @@ tarball_name=$(npm pack --pack-destination "$work" --ignore-scripts --json --pre
 tarball="$work/$tarball_name"
 home="$work/home"
 mkdir -p "$home"
-npm install --prefix "$home" --save-exact \
+printf '%s\n' '{"private":true}' > "$home/package.json"
+published=$(npm view "@deepseek-ai/dsh@$version" "time[$version]" --json | node -pe 'JSON.parse(require("node:fs").readFileSync(0, "utf8"))')
+release_cutoff=$(node -e 'console.log(new Date(Date.parse(process.argv[1]) + 3600000).toISOString())' "$published")
+npm install --prefix "$home" --save-exact --before "$release_cutoff" \
   "@deepseek-ai/dsh@$version" \
   "@deepseek-ai/cordis@4.0.2" \
   "@deepseek-ai/cordis-plugin-loader@1.0.3"
