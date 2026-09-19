@@ -31,10 +31,13 @@ mounts"; it falls back to `process.env` when a host provided none. The plugin
 never reads `ctx.cmdlineArgs` (`dsh:packages/boot/cmdline/src/index.ts:27-33`) —
 no argv parsing anywhere, in either mode.
 
-"Fatal" means `ctx.appExit(1)` after one stderr line, never a throw from `apply`:
-a non-disabled row whose fiber never activates is a hard boot failure
-(`dsh:packages/boot/app-boot/src/index.ts:673-679`, error text at
-`:772-822` — `plugin tree failed to load`).
+"Fatal" means `ctx.appExit(1)` after one stderr line, never a throw from `apply`.
+DSH's surrounding startup policy differs by version: 0.1.5-rc.2 rejects every
+enabled unresolved or inactive row (`@deepseek-ai/dsh-app-boot@0.1.5-rc.2
+lib/index.js:1428-1493`); 0.1.6-alpha.1 and alpha.2 reject only the bootstrap and
+core-ID set and warn for optional rows (`@deepseek-ai/dsh-app-boot@0.1.6-alpha.1
+lib/index.js:2408-2515`; `@deepseek-ai/dsh-app-boot@0.1.6-alpha.2
+lib/index.js:2469-2477,2642-2653`).
 
 **Source precedence** (owner addendum, one rule for every profile: dashi, plain
 DSH, and any web profile, which then needs only the plugin row inserted):
@@ -347,11 +350,10 @@ launcher or product identity.
 
 **7.2 Does `dashi-app` ship the plugin in peer mode by default?**
 *Recommendation: yes*, per D-036/W-036, gated on the no-daemon evidence
-(§3). Rejected alternative — an optional row — is not expressible: a
-non-disabled row that fails to import is a hard boot failure
-(`dsh:packages/boot/app-boot/src/index.ts:673-679`), and `disabled: true` by
-default would need a user patch edit to turn on, which is worse than a
-dependency.
+(§3). Rejected alternative — an optional row — is not useful: an unresolved
+enabled row fails startup on 0.1.5-rc.2 and is only a warning on alpha.1/alpha.2
+(§1.1), where the integration is still absent; `disabled: true` by default would
+need a user patch edit to turn on, which is worse than a dependency.
 
 **7.3 Groups environment format.**
 *Recommendation: a JSON array*, `SESSIONBUS_GROUPS='["a","b"]'` — the
@@ -380,8 +382,9 @@ change through this path.
 **7.6 Package name.**
 *Recommendation:* `@sessionbus/dsh`, per the more specific statement in
 as §3.4:1044, and publish `@sessionbus/dsh-comms` as a deprecated alias
-pointing at it. dashi pins whatever the patch row names; a mismatch is a hard
-boot failure, not a warning.
+pointing at it. dashi pins whatever the patch row names; a mismatch is fatal on
+0.1.5-rc.2 and an optional-row warning with no integration on alpha.1/alpha.2
+(§1.1).
 
 **7.7 Which rows the `sessionbus` profile inserts.**
 *Recommendation:* the profile patch carries `session-controller` and

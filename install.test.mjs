@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { install } from "./install.mjs";
+import { install, remove } from "./install.mjs";
 
 test("installer creates only the lane profile and leaves the root patch untouched", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-package-"));
@@ -116,6 +116,40 @@ test("installer requires and validates a stable peer product", () => {
   }
 });
 
+test("removal never loads the plugin and preserves every other row", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-remove-home-"));
+  const profile = path.join(home, "profiles", "broken");
+  const original = "# keep\n- insert:\n    - { id: keeper, name: keeper }\n";
+  install(["broken"], { home, product: "dsh", run: () => {
+    mkdirSync(path.join(profile, "node_modules", "@sessionbus", "dsh"), { recursive: true });
+    writeFileSync(path.join(profile, "package.json"), JSON.stringify({ private: true, dependencies: { "@sessionbus/dsh": "0.1.0-pre.1" } }));
+    writeFileSync(path.join(profile, "cordis.patch.yml"), original);
+    writeFileSync(path.join(profile, "node_modules", "@sessionbus", "dsh", "package.json"), JSON.stringify({ name: "@sessionbus/dsh", version: "0.1.0-pre.1" }));
+    writeFileSync(path.join(profile, "node_modules", "@sessionbus", "dsh", "plugin.cjs"), "throw new Error('unloadable')\n");
+    return { status: 0 };
+  } });
+  const broken = spawnSync(process.execPath, [path.join(profile, "node_modules", "@sessionbus", "dsh", "plugin.cjs")], { encoding: "utf8" });
+  assert.notEqual(broken.status, 0);
+  remove(["broken"], { home });
+  assert.equal(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), original);
+  assert.equal(JSON.parse(readFileSync(path.join(profile, "package.json"), "utf8")).dependencies?.["@sessionbus/dsh"], undefined);
+  assert.equal(existsSync(path.join(profile, "node_modules", "@sessionbus", "dsh")), false);
+});
+
+test("removal ignores product and deletes owned block and flow rows", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-remove-rows-"));
+  const calls = [];
+  for (const [name, sessionbus] of [["old", "    - { id: sessionbus, name: '@sessionbus/dsh' }\n"], ["new", "    - id: sessionbus\n      name: '@sessionbus/dsh'\n      config: { product: dsh }\n"]]) {
+    const profile = path.join(home, "profiles", name);
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(path.join(profile, "cordis.patch.yml"), `- insert:\n    - { id: keeper, name: keeper }\n${sessionbus}    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }\n`);
+  }
+  remove(["old", "new"], { home, run: (args, cwd) => { calls.push([args, cwd]); return { status: 0 }; } });
+  for (const name of ["old", "new"]) assert.equal(readFileSync(path.join(home, "profiles", name, "cordis.patch.yml"), "utf8"), "- insert:\n    - { id: keeper, name: keeper }\n");
+  assert.deepEqual(calls, ["old", "new"].map(name => [["remove", "@sessionbus/dsh"], path.join(home, "profiles", name)]));
+  assert.throws(() => remove([], { home }), /requires at least one profile/u);
+});
+
 test("installed bin symlink runs the installer", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-bin-home-"));
   const bin = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-bin-"));
@@ -134,9 +168,14 @@ test("installed bin symlink runs the installer", () => {
   for (const [args, message] of [
     [["web"], /required for peer profiles/u],
     [["--product"], /requires a value/u],
+    [["--remove"], /requires at least one profile/u],
   ]) {
     const failed = spawnSync(command, args, { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
     assert.equal(failed.status, 1);
     assert.match(failed.stderr, message);
   }
+  const removed = spawnSync(command, ["--remove", "sessionbus"], { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.equal(JSON.parse(readFileSync(path.join(profile, "package.json"), "utf8")).dependencies?.["@sessionbus/dsh"], undefined);
+  assert.doesNotMatch(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), /sessionbus|file-uploads-none/u);
 });
