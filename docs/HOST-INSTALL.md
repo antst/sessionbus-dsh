@@ -5,8 +5,9 @@ example. Run it as the ordinary account returned by `id -un`, never with
 `sudo`, and refer to its home as `$HOME` in commands. On `umka-dev1` that
 account is `antst` and its home is `/home/antst`; earlier references to `pdev`
 were wrong. The target set is DSH `0.1.5-rc.2`, dashi
-`0.1.0-alpha.20`, and `@sessionbus/dsh` `0.1.0-pre.2`. Do not continue
-past a failed assertion.
+`0.1.0-alpha.20`, and `@sessionbus/dsh` `0.1.0-pre.4`. `@sessionbus/dsh`
+`0.1.0-pre.3` was tagged but never published to npm and must not be
+referenced. Do not continue past a failed assertion.
 
 This runbook is the real-daemon acceptance procedure for DSH `0.1.5-rc.2`.
 The equivalent acceptance on `0.1.6-alpha.2` is still outstanding.
@@ -22,7 +23,7 @@ packages below are published. Run these exact probes immediately before starting
 
 ```sh
 npm view @antst/dashi-launcher@0.1.0-alpha.20 version && npm view @antst/dashi-app@0.1.0-alpha.20 version && npm view @antst/dsh-file-uploads-none@0.1.0-alpha.18 version
-npm view @sessionbus/dsh@0.1.0-pre.2 version && npm view @sessionbus/kit@0.1.0-pre.3 version
+npm view @sessionbus/dsh@0.1.0-pre.4 version && npm view @sessionbus/kit@0.5.5 version
 ```
 
 Expected output, in order:
@@ -31,8 +32,8 @@ Expected output, in order:
 0.1.0-alpha.20
 0.1.0-alpha.20
 0.1.0-alpha.18
-0.1.0-pre.2
-0.1.0-pre.3
+0.1.0-pre.4
+0.5.5
 ```
 
 An `E404` means stop; it is not permission to substitute a preview URL or a
@@ -370,12 +371,12 @@ launcher and installer find their child `dsh`:
 
 ```sh
 cd "$DSH_INSTALL_DIR"
-pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.2
+pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.4
 test -x "$HOST_BIN_DIR/sessionbus-dsh"
 ensure_dsh_graph "$DSH_INSTALL_DIR"
 ```
 
-Expected output reports `@sessionbus/dsh 0.1.0-pre.2` and a nonzero host DSH
+Expected output reports `@sessionbus/dsh 0.1.0-pre.4` and a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
 Upgrade both installed profiles in place. Re-running the installer repairs the
@@ -383,10 +384,10 @@ old rows by adding their required stable products: `sessionbus-dsh` for the
 lane profile and `dashi` for the dashi peer profile.
 
 ```sh
-"$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.2
+"$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.4
 ensure_dsh_graph "$DSH_HOME/profiles/sessionbus"
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
-"$DSH_BIN" plugin --profile dashi add @sessionbus/dsh@0.1.0-pre.2
+"$DSH_BIN" plugin --profile dashi add @sessionbus/dsh@0.1.0-pre.4
 ensure_dsh_graph "$DSH_HOME/profiles/dashi"
 "$DSH_BIN" plugin --profile dashi exec sessionbus-dsh-install --product dashi dashi
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
@@ -395,7 +396,7 @@ grep -F 'config: { mode: lane, product: sessionbus-dsh }' "$DSH_HOME/profiles/se
 grep -F 'config: { product: dashi }' "$DSH_HOME/profiles/dashi/cordis.patch.yml"
 ```
 
-Expected output contains `@sessionbus/dsh 0.1.0-pre.2` for both profiles,
+Expected output contains `@sessionbus/dsh 0.1.0-pre.4` for both profiles,
 nonzero single-version rc.2 graphs, and these exact repaired rows:
 
 ```text
@@ -410,7 +411,7 @@ group. Re-check its graph immediately after the package add:
 ```sh
 test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" --profile web --dump-default-config >"$ROLLBACK_ROOT/web-default-config.yml"
-"$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.2
+"$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.4
 ensure_dsh_graph "$DSH_HOME/profiles/web"
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
@@ -739,7 +740,7 @@ for profile_name in web dashi sessionbus; do
   installer="$DSH_HOME/profiles/$profile_name/node_modules/.bin/sessionbus-dsh-install"
   package="$DSH_HOME/profiles/$profile_name/node_modules/@sessionbus/dsh/package.json"
   installed_version=$(if [ -f "$package" ]; then node -p 'require(process.argv[1]).version' "$package" 2>/dev/null || true; fi)
-  if [ "$installed_version" = '0.1.0-pre.2' ] && [ -x "$installer" ]; then
+  if [ "$installed_version" = '0.1.0-pre.4' ] && [ -x "$installer" ]; then
     pnpm --dir "$DSH_HOME/profiles/$profile_name" exec sessionbus-dsh-install --remove "$profile_name"
   fi
 done
