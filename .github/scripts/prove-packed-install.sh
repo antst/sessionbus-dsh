@@ -4,7 +4,6 @@ set -euo pipefail
 version=${1:?pass the DSH version}
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/sessionbus-dsh-proof.XXXXXX")
-export PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=false
 server_pid=
 dsh_pid=
 

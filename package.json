@@ -13,7 +13,7 @@
     "test": "node --test plugin.test.cjs install.test.mjs launcher.test.mjs package.test.cjs rename.test.mjs"
   },
   "dependencies": {
-    "@antst/dsh-file-uploads-none": "https://pkg.pr.new/antst/dashi/@antst/dsh-file-uploads-none@281f390",
+    "@antst/dsh-file-uploads-none": "0.1.0-alpha.18",
     "@sessionbus/kit": "0.1.0-pre.3"
   },
   "peerDependencies": {
