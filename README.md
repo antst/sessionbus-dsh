@@ -9,9 +9,6 @@ one prerelease package can otherwise pull newer prereleases through DSH's caret 
 `@sessionbus/dsh` is a pkg.pr.new preview until a separately reviewed trusted-
 publishing workflow exists; its first registry version must be published manually
 before trusted publishing can be configured.
-`@antst/dsh-file-uploads-none` is a preview until its npm publish and is swapped
-for the exact published version at release.
-
 The plugin reads the token once, deletes it from process.env, and retains it
 nowhere in the plugin; DSH's immutable launch snapshot keeps it for the process
 lifetime (trusted host).
