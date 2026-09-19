@@ -55,4 +55,7 @@ sessionbus-dsh-install --remove web` is the equivalent convenience form. The
 installer removes the package first, then strips its managed `sessionbus` and
 `file-uploads-none` rows.
 
+`SESSIONBUS_GROUPS` configures peer identities only. Lane membership is owned
+by the daemon; the plugin accepts and does not consume groups in `session.open`.
+
 See [Lane without a TUI](docs/LANE-WITHOUT-TUI.md) for the daemon launch contract.

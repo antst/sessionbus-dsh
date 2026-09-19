@@ -44,16 +44,19 @@ DSH, and any web profile, which then needs only the plugin row inserted):
 
 | Input | 1. config row | 2. environment | 3. default |
 |---|---|---|---|
-| groups | `groups: [..]` | `SESSIONBUS_GROUPS` (JSON array) | private group only |
+| peer groups | `groups: [..]` | `SESSIONBUS_GROUPS` (JSON array) | private group only |
+| lane groups | never | daemon `session.open` | daemon-selected |
 | socket | `socket: <path>` | `SESSIONBUS_SOCKET` | the documented socket path |
 | local key | `local_key: <k>` | `SESSIONBUS_LOCAL_KEY` | no key |
 | launch token | never in config | `SESSIONBUS_LAUNCH_TOKEN` | absent → peer mode |
 
 The first present source wins per input; sources never merge. Per-root-session
 semantics (one connection per root, identity and title per root, delivery by
-connection) already cover web-profile sessions. Groups are fixed for the life
-of a session: a re-hello with a different group set is invalid, and a session
-with different groups is a new session.
+connection) already cover web-profile sessions. Peer groups are fixed for the
+life of a session: a re-hello with a different group set is invalid, and a
+session with different groups is a new session. Lane membership belongs to the
+daemon; the plugin accepts and does not consume groups in `session.open`, and
+the worker hello cannot carry them.
 
 ### 1.2 The six callbacks
 
@@ -195,7 +198,7 @@ continues to use dashi's launcher; its separate token path is proved in dashi.
 | Change | Where | Size |
 |---|---|---|
 | token present in `process.env` → spawn `--profile sessionbus`, else forward unchanged | `@sessionbus/dsh` package bin `sessionbus-dsh` | ~20 lines |
-| token present → select dashi's lane profile; `-g/--group` becomes `SESSIONBUS_GROUPS` | `dashi:packages/dashi-launcher/bin/dashi.js` | W-036 |
+| token present → select dashi's lane profile; lane groups arrive in `session.open` | `dashi:packages/dashi-launcher/bin/dashi.js`, daemon | W-036/W-079 |
 | exact pin + patch row | `dashi:packages/dashi-app/package.json:32-45`, `cordis.patch.yml` | 2 lines |
 | README paragraph on presence, groups, title-as-name | per W-036 | ~10 lines |
 | D-036 amended (see §7.1) | `dashi:LEDGER.md:429-441` | ledger |
@@ -331,19 +334,19 @@ adopted.
 **7.1 The launchers and `-g` (ruled; D-036 to be amended).**
 D-036 (`dashi:LEDGER.md:429-441`) made the launcher a plain forwarder and
 mapped `-g` to a native `/sessionbus group <g>` command at startup. The
-owner's boot-layer ruling supersedes it: the plugin never reads argv, `-g`
-lands in `SESSIONBUS_GROUPS`, and each product's launcher selects its profile.
-*Applied as:* the launcher gains exactly one env read (the token → `--profile
-sessionbus`) and one flag parse (`-g/--group`, repeatable and
-comma-splitting, consumed into `SESSIONBUS_GROUPS` as a JSON array),
-forwarding everything else untouched (`dashi:packages/dashi-launcher/bin/dashi.js:4`).
+owner's boot-layer ruling supersedes it: the plugin never reads argv, each
+product's launcher selects its profile, and the daemon owns lane membership
+through `session.open`. *Applied as:* the launcher gains exactly one env read (the token
+→ `--profile sessionbus`) and forwards argv untouched
+(`dashi:packages/dashi-launcher/bin/dashi.js:4`).
 The dashi architect amends D-036 at W-036. Cost, stated plainly: the launcher
 is no longer a purely dumb forwarder, and the documented no-launcher form
 `dsh --profile dashi` (`dashi:DESIGN.md:218-219`) loses `-g` — lane mode still
 works there because the plugin reads the token itself, but the operator must
 spell `--profile sessionbus` by hand. The startup `/sessionbus group`
-call from D-036 is dropped; groups have exactly one source, the environment,
-and `/sessionbus` (7.4) reports them. Recorded as the smallest change; no
+call from D-036 is dropped; peer groups come from configuration while the
+plugin accepts and does not consume daemon-owned lane groups in `session.open`.
+Recorded as the smallest change; no
 further decision needed. The standalone lane uses the package-owned
 `sessionbus-dsh` bin and the `sessionbus-dsh` product; it does not reuse dashi's
 launcher or product identity.
@@ -356,11 +359,12 @@ enabled row fails startup on 0.1.5-rc.2 and is only a warning on alpha.1/alpha.2
 need a user patch edit to turn on, which is worse than a dependency.
 
 **7.3 Groups environment format.**
-*Recommendation: a JSON array*, `SESSIONBUS_GROUPS='["a","b"]'` — the
+*Recommendation for peer mode: a JSON array*, `SESSIONBUS_GROUPS='["a","b"]'` — the
 shipped client's existing format (`as:integrations/dsh/comms/plugin.cjs:36,52-58`).
 A comma list is ambiguous on the wire: as §1.1:44-47 permits any printable
-non-whitespace character in a name part, comma included. The CLI spelling stays
-`-g a,b` and `-g a -g b`; only launcher→plugin is JSON.
+non-whitespace character in a name part, comma included. Lane mode never reads
+the variable: its hello forbids groups, and the plugin accepts without consuming
+the daemon-owned membership array carried by `session.open`.
 
 **7.4 A `/sessionbus` command.**
 "No argv" does not forbid an interactive command; `commands.register`
