@@ -8,6 +8,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { connectPeer } = require("@sessionbus/kit");
 const { ACTIONS, activate, apply, createRuntime, settings, terminal } = require("./plugin.cjs");
+const packageVersion = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version;
 
 function deferred() {
   let resolve, reject;
@@ -229,7 +230,7 @@ test("lane hello omits groups and session.open carrying daemon groups succeeds",
   const native = agent(ctx);
   const { deps } = lane(ctx);
   assert.deepEqual(deps.callbacks.hello(), {
-    product: "sessionbus-dsh", version: "0.1.0-pre.1", supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
+    product: "sessionbus-dsh", version: packageVersion, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
   });
   const result = await deps.callbacks.open(null, {
     name: "parent/worker@host", groups: ["lane-primary", "lane-secondary"], open: { cwd: "/other", permission_mode: "never", model: "vendor/model/name", reasoning_effort: "high" },

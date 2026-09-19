@@ -6,9 +6,11 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const packageManifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+const packageVersion = packageManifest.version;
 
 test("package metadata stays rooted in the standalone repository", () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  const manifest = packageManifest;
   assert.deepEqual(manifest.repository, {
     type: "git",
     url: "git+https://github.com/antst/sessionbus-dsh.git",
@@ -45,7 +47,7 @@ test("the extracted package imports and its real bin performs installation", () 
   const home = path.join(directory, "dsh-home");
   const profile = path.join(home, "profiles", "sessionbus");
   fs.mkdirSync(profile, { recursive: true });
-  fs.writeFileSync(path.join(profile, "package.json"), '{"dependencies":{"@sessionbus/dsh":"0.1.0-pre.1"}}\n');
+  fs.writeFileSync(path.join(profile, "package.json"), `${JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } })}\n`);
   fs.writeFileSync(path.join(profile, "cordis.patch.yml"), "[]\n");
   const rootPatch = "# product-owned peer configuration\n[]\n";
   fs.writeFileSync(path.join(home, "cordis.patch.yml"), rootPatch);
@@ -63,7 +65,7 @@ test("the extracted package imports and its real bin performs installation", () 
   const directHome = path.join(directory, "direct-home");
   const directProfile = path.join(directHome, "profiles", "sessionbus");
   fs.mkdirSync(directProfile, { recursive: true });
-  fs.writeFileSync(path.join(directProfile, "package.json"), '{"dependencies":{"@sessionbus/dsh":"0.1.0-pre.1"}}\n');
+  fs.writeFileSync(path.join(directProfile, "package.json"), `${JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } })}\n`);
   fs.writeFileSync(path.join(directProfile, "cordis.patch.yml"), "[]\n");
   const direct = spawnSync(process.execPath, [path.join(packageRoot, "bin.mjs")], { encoding: "utf8", env: { ...process.env, DSH_HOME: directHome } });
   assert.equal(direct.status, 0, direct.stderr);
@@ -72,7 +74,7 @@ test("the extracted package imports and its real bin performs installation", () 
   const peerHome = path.join(directory, "peer-home");
   const peerProfile = path.join(peerHome, "profiles", "web");
   fs.mkdirSync(peerProfile, { recursive: true });
-  fs.writeFileSync(path.join(peerProfile, "package.json"), '{"dependencies":{"@sessionbus/dsh":"0.1.0-pre.1"}}\n');
+  fs.writeFileSync(path.join(peerProfile, "package.json"), `${JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } })}\n`);
   fs.writeFileSync(path.join(peerProfile, "cordis.patch.yml"), "[]\n");
   const peer = spawnSync(process.execPath, [path.join(packageRoot, "bin.mjs"), "--product", "dsh", "web"], { encoding: "utf8", env: { ...process.env, DSH_HOME: peerHome } });
   assert.equal(peer.status, 0, peer.stderr);
