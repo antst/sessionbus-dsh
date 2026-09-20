@@ -1,0 +1,5 @@
+- insert:
+    - { id: workspace, name: '@deepseek-ai/dsh-workspace' }
+    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }
+    - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }
+    - { id: sessionbus, name: '@sessionbus/dsh', config: { product: dashi } }

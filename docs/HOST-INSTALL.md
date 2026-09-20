@@ -612,9 +612,9 @@ repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 Expected output reports `@sessionbus/dsh 0.1.0-pre.4` and a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
-Upgrade both installed profiles in place. Re-running the installer repairs the
-old rows by adding their required stable products: `sessionbus-dsh` for the
-lane profile and `dashi` for the dashi peer profile. The sessionbus profile add
+Upgrade the installed sessionbus profile in place. Re-running the installer
+repairs its old row by adding the required stable product `sessionbus-dsh`. The
+sessionbus profile add
 prints `declares no dsh.bundle — installed as a plain dependency`; this is
 expected because that lane profile consumes the host DSH graph. Section 5 adds
 the selected model provider's packages to this lane profile and the plain web
@@ -623,22 +623,25 @@ Starting with `@sessionbus/dsh@0.1.0-pre.8`, re-running the installer merges its
 dependency, row, and base-bundle entry into the existing profile manifest; it
 does not remove provider packages, other bundles, or other manifest fields.
 
+`@antst/dashi-app@0.1.0-alpha.20` and later already ship the `sessionbus` row
+and their exact `@sessionbus/dsh` dependency. Do not run the installer against
+the dashi profile: the dashi product runs the plugin version that dashi-app
+pins, until dashi-app publishes a newer pin.
+
 ```sh
 "$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.4
 repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 optional sessionbus
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
-"$DSH_BIN" plugin --profile dashi add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
-"$DSH_BIN" plugin --profile dashi exec sessionbus-dsh-install --product dashi dashi
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @sessionbus/dsh
 grep -F 'config: { mode: lane, product: sessionbus-dsh }' "$DSH_HOME/profiles/sessionbus/cordis.patch.yml"
-grep -F 'config: { product: dashi }' "$DSH_HOME/profiles/dashi/cordis.patch.yml"
+grep -F 'config: { product: dashi }' "$DSH_HOME/profiles/dashi/node_modules/@antst/dashi-app/cordis.patch.yml"
 ```
 
-Expected output contains `@sessionbus/dsh 0.1.0-pre.4` for both profiles, no DSH
-version other than rc.2 in either graph (the lane graph may have zero DSH
-records), and these exact repaired rows:
+Expected output contains `@sessionbus/dsh 0.1.0-pre.4` for the sessionbus
+profile and the exact version pinned by dashi-app for the dashi profile, no DSH
+version other than rc.2 in the lane graph (which may have zero DSH records),
+and these exact rows:
 
 ```text
 config: { mode: lane, product: sessionbus-dsh }
@@ -1258,7 +1261,7 @@ Remove the current plugin rows and package from every profile where its
 installer is present. This path does not require a profile to boot:
 
 ```sh
-for profile_name in web dashi sessionbus; do
+for profile_name in web sessionbus; do
   installer="$DSH_HOME/profiles/$profile_name/node_modules/.bin/sessionbus-dsh-install"
   package="$DSH_HOME/profiles/$profile_name/node_modules/@sessionbus/dsh/package.json"
   installed_version=$(if [ -f "$package" ]; then node -p 'require(process.argv[1]).version' "$package" 2>/dev/null || true; fi)
@@ -1268,9 +1271,10 @@ for profile_name in web dashi sessionbus; do
 done
 ```
 
-Expected output: each present profile reports removal of the current
+Expected output: each installer-managed profile reports removal of the current
 `@sessionbus/dsh` package and its managed rows; absent or not-yet-installed
-profiles are explicitly skipped.
+profiles are explicitly skipped. The dashi-app-owned dependency and bundle row
+are restored with the dashi profile files below, not removed by this installer.
 
 Restore the service environment and its prior PATH authority. Every operation
 is guarded for a rollback that began before the service edit:

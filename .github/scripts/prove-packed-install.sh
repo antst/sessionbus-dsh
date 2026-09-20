@@ -126,6 +126,7 @@ npm install --prefix "$home" --save-exact "@antst/dashi-launcher@0.1.0-alpha.20"
 dsh="$home/node_modules/.bin/dsh"
 
 DSH_HOME="$home" "$dsh" plugin --profile sessionbus add "$root/.github/fixtures/manifest-keeper-bundle"
+DSH_HOME="$home" "$dsh" plugin --profile dashi add "$root/.github/fixtures/bundle-provides-sessionbus"
 for profile in sessionbus web dashi; do
   DSH_HOME="$home" "$dsh" plugin --profile "$profile" add "$tarball"
 done
@@ -133,11 +134,16 @@ cp "$home/profiles/sessionbus/package.json" "$work/lane-manifest-before-install.
 DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install"
 cmp -s "$work/lane-manifest-before-install.json" "$home/profiles/sessionbus/package.json"
 DSH_HOME="$home" "$home/profiles/web/node_modules/.bin/sessionbus-dsh-install" --product dsh web
-printf '%s\n' '- insert:' \
-  "    - { id: workspace, name: '@deepseek-ai/dsh-workspace' }" \
-  "    - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }" \
-  "    - { id: sessionbus, name: '@sessionbus/dsh' }" > "$home/profiles/dashi/cordis.patch.yml"
-DSH_HOME="$home" "$home/profiles/dashi/node_modules/.bin/sessionbus-dsh-install" --product dashi dashi
+cp "$home/profiles/dashi/package.json" "$work/dashi-manifest-before-refusal.json"
+cp "$home/profiles/dashi/cordis.patch.yml" "$work/dashi-patch-before-refusal.yml"
+set +e
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" "$home/profiles/dashi/node_modules/.bin/sessionbus-dsh-install" --product dashi dashi >"$work/dashi-install.stdout" 2>"$work/dashi-install.stderr"
+dashi_install_status=$?
+set -e
+[[ "$dashi_install_status" -eq 2 ]]
+grep -Fx 'sessionbus-dsh-install: profile "dashi" bundle "@sessionbus/w090-bundle-row" already provides row "sessionbus"' "$work/dashi-install.stderr"
+cmp -s "$work/dashi-manifest-before-refusal.json" "$home/profiles/dashi/package.json"
+cmp -s "$work/dashi-patch-before-refusal.yml" "$home/profiles/dashi/cordis.patch.yml"
 for profile in sessionbus web dashi; do
   if [[ "$version" = 0.1.6-alpha.1 ]]; then
   cat > "$home/profiles/$profile/.pnpmfile.cjs" <<EOF
@@ -175,9 +181,9 @@ assert.deepEqual(laneManifest.dsh.profile.bundles, ["@deepseek-ai/dsh-base", "@s
 assert.match(web, /id: sessionbus/u);
 assert.match(web, /product: dsh/u);
 assert.doesNotMatch(web, /file-uploads-none/u);
-assert.equal((dashi.match(/id: sessionbus/gu) || []).length, 1);
-assert.match(dashi, /product: dashi/u);
-assert.match(dashi, /dsh-file-uploads-none/u);
+assert.doesNotMatch(dashi, /id: sessionbus/u);
+const dashiManifest = JSON.parse(fs.readFileSync(`${home}/profiles/dashi/package.json`, "utf8"));
+assert.equal(dashiManifest.dsh.profile.bundles.includes("@sessionbus/w090-bundle-row"), true);
 assert.equal(fs.existsSync(`${home}/cordis.patch.yml`), false);
 for (const [name, wanted] of [["@deepseek-ai/dsh", version], ["@deepseek-ai/cordis", "4.0.2"], ["@deepseek-ai/cordis-plugin-loader", "1.0.3"], ["@antst/dashi-launcher", "0.1.0-alpha.20"]]) {
   assert.equal(require(`${name}/package.json`).version, wanted);

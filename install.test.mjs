@@ -43,13 +43,13 @@ test("installer creates only the lane profile and leaves the root patch untouche
   assert.equal(readFileSync(path.join(home, "profiles", "sessionbus", "cordis.patch.yml"), "utf8"), repaired);
   assert.equal(runs, 1);
   assert.equal(first.peer, rootPatch);
-  assert.equal(first.profile, `- id: system-prompt
+  assert.equal(first.profile, `- id: system-prompt # sessionbus-dsh-install owned
   config:
     persona: >-
       You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
-- id: session-title-llm
+- id: session-title-llm # sessionbus-dsh-install owned
   disabled: true
-- id: permission
+- id: permission # sessionbus-dsh-install owned
   config:
     presets:
       read-only: { sandbox: read-only, approval: ask }
@@ -58,10 +58,10 @@ test("installer creates only the lane profile and leaves the root patch untouche
       danger-full-access: { sandbox: danger-full-access, approval: never }
 
 - insert:
-    - { id: workspace, name: '@deepseek-ai/dsh-workspace' }
-    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }
-    - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }
-    - id: sessionbus
+    - { id: workspace, name: '@deepseek-ai/dsh-workspace' } # sessionbus-dsh-install owned
+    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' } # sessionbus-dsh-install owned
+    - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' } # sessionbus-dsh-install owned
+    - id: sessionbus # sessionbus-dsh-install owned
       name: '@sessionbus/dsh'
       config: { mode: lane, product: sessionbus-dsh }
 `);
@@ -117,6 +117,25 @@ test("installer adds one profile-local peer row to each named profile", () => {
   assert.equal(existsSync(path.join(home, "cordis.patch.yml")), false);
 });
 
+test("installer refuses a sessionbus row supplied by a profile bundle without changing the profile", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-bundle-row-"));
+  const profile = path.join(home, "profiles", "dashi");
+  const bundle = "@sessionbus/w090-bundle-row";
+  mkdirSync(path.join(profile, "node_modules", "@sessionbus"), { recursive: true });
+  symlinkSync(path.resolve(".github/fixtures/bundle-provides-sessionbus"), path.join(profile, "node_modules", bundle));
+  const manifest = `${JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion, [bundle]: "0.0.0" }, dsh: { profile: { bundles: [bundle] } } }, null, 2)}\n`;
+  const patch = "# unchanged\n[]\n";
+  writeFileSync(path.join(profile, "package.json"), manifest);
+  writeFileSync(path.join(profile, "cordis.patch.yml"), patch);
+  assert.throws(() => install(["dashi"], { home, product: "dashi", run: () => assert.fail("preflight must not install") }), error => {
+    assert.equal(error.exitCode, 2);
+    assert.match(error.message, /bundle "@sessionbus\/w090-bundle-row" already provides row "sessionbus"/u);
+    return true;
+  });
+  assert.equal(readFileSync(path.join(profile, "package.json"), "utf8"), manifest);
+  assert.equal(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), patch);
+});
+
 test("installer preserves existing rows with quoted keys", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-native-home-"));
   const dashi = path.join(home, "profiles", "dashi");
@@ -141,7 +160,7 @@ test("installer repairs a block row without changing neighboring text", () => {
   writeFileSync(path.join(web, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion } }));
   writeFileSync(path.join(web, "cordis.patch.yml"), "# keep\n- insert:\n    - id: sessionbus\n      name: '@sessionbus/dsh'\n- id: neighboring-row\n  disabled: true\n");
   install(["web"], { home, product: "dsh", run: () => assert.fail("dependency already installed") });
-  assert.equal(readFileSync(path.join(web, "cordis.patch.yml"), "utf8"), "# keep\n- insert:\n    - id: sessionbus\n      name: '@sessionbus/dsh'\n      config: { product: dsh }\n- id: neighboring-row\n  disabled: true\n");
+  assert.equal(readFileSync(path.join(web, "cordis.patch.yml"), "utf8"), "# keep\n- insert:\n    - id: sessionbus # sessionbus-dsh-install owned\n      name: '@sessionbus/dsh'\n      config: { product: dsh }\n- id: neighboring-row\n  disabled: true\n");
 });
 
 test("installer requires and validates a stable peer product", () => {
@@ -155,7 +174,7 @@ test("installer requires and validates a stable peer product", () => {
 test("removal never loads the plugin and preserves every other row", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-remove-home-"));
   const profile = path.join(home, "profiles", "broken");
-  const original = "# keep\n- insert:\n    - { id: keeper, name: keeper }\n";
+  const original = "# keep\n- id: system-prompt\n  config: { preserve: true }\n- insert:\n    - { id: keeper, name: keeper }\n";
   install(["broken"], { home, product: "dsh", run: () => {
     mkdirSync(path.join(profile, "node_modules", "@sessionbus", "dsh"), { recursive: true });
     writeFileSync(path.join(profile, "package.json"), JSON.stringify({ private: true, dependencies: { "@sessionbus/dsh": packageVersion } }));
@@ -175,15 +194,31 @@ test("removal never loads the plugin and preserves every other row", () => {
 test("removal ignores product and deletes owned block and flow rows", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-remove-rows-"));
   const calls = [];
-  for (const [name, sessionbus] of [["old", "    - { id: sessionbus, name: '@sessionbus/dsh' }\n"], ["new", "    - id: sessionbus\n      name: '@sessionbus/dsh'\n      config: { product: dsh }\n"]]) {
+  for (const [name, sessionbus] of [["old", "    - { id: sessionbus, name: '@sessionbus/dsh' } # sessionbus-dsh-install owned\n"], ["new", "    - id: sessionbus # sessionbus-dsh-install owned\n      name: '@sessionbus/dsh'\n      config: { product: dsh }\n"]]) {
     const profile = path.join(home, "profiles", name);
     mkdirSync(profile, { recursive: true });
-    writeFileSync(path.join(profile, "cordis.patch.yml"), `- insert:\n    - { id: keeper, name: keeper }\n${sessionbus}    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' }\n`);
+    writeFileSync(path.join(profile, "cordis.patch.yml"), `- insert:\n    - { id: keeper, name: keeper }\n${sessionbus}    - { id: file-uploads-none, name: '@antst/dsh-file-uploads-none' } # sessionbus-dsh-install owned\n`);
   }
   remove(["old", "new"], { home, run: (args, cwd) => { calls.push([args, cwd]); return { status: 0 }; } });
   for (const name of ["old", "new"]) assert.equal(readFileSync(path.join(home, "profiles", name, "cordis.patch.yml"), "utf8"), "- insert:\n    - { id: keeper, name: keeper }\n");
   assert.deepEqual(calls, ["old", "new"].map(name => [["remove", "@sessionbus/dsh"], path.join(home, "profiles", name)]));
   assert.throws(() => remove([], { home }), /requires at least one profile/u);
+});
+
+test("removal refuses an unmarked matching row before removing the package", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-unowned-row-"));
+  const profile = path.join(home, "profiles", "web");
+  const patch = "- insert:\n    - { id: sessionbus, name: '@sessionbus/dsh' }\n";
+  mkdirSync(profile, { recursive: true });
+  writeFileSync(path.join(profile, "cordis.patch.yml"), patch);
+  let ran = false;
+  assert.throws(() => remove(["web"], { home, run: () => { ran = true; return { status: 0 }; } }), error => {
+    assert.equal(error.exitCode, 2);
+    assert.match(error.message, /row "sessionbus" has no sessionbus-dsh-install ownership marker/u);
+    return true;
+  });
+  assert.equal(ran, false);
+  assert.equal(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), patch);
 });
 
 test("installed bin symlink runs the installer", () => {
@@ -213,5 +248,27 @@ test("installed bin symlink runs the installer", () => {
   const removed = spawnSync(command, ["--remove", "sessionbus"], { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
   assert.equal(removed.status, 0, removed.stderr);
   assert.equal(JSON.parse(readFileSync(path.join(profile, "package.json"), "utf8")).dependencies?.["@sessionbus/dsh"], undefined);
-  assert.doesNotMatch(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), /sessionbus|file-uploads-none/u);
+  assert.equal(readFileSync(path.join(profile, "cordis.patch.yml"), "utf8"), "[]\n");
+});
+
+test("installed bin reports bundle and unowned-row refusals with exit two", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-bin-refusal-home-"));
+  const bin = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-bin-refusal-"));
+  const command = path.join(bin, "sessionbus-dsh-install");
+  symlinkSync(path.resolve("bin.mjs"), command);
+  const bundleName = "@sessionbus/w090-bundle-row";
+  const bundled = path.join(home, "profiles", "bundled");
+  mkdirSync(path.join(bundled, "node_modules", "@sessionbus"), { recursive: true });
+  symlinkSync(path.resolve(".github/fixtures/bundle-provides-sessionbus"), path.join(bundled, "node_modules", bundleName));
+  writeFileSync(path.join(bundled, "package.json"), JSON.stringify({ dependencies: { "@sessionbus/dsh": packageVersion }, dsh: { profile: { bundles: [bundleName] } } }));
+  writeFileSync(path.join(bundled, "cordis.patch.yml"), "[]\n");
+  const bundleResult = spawnSync(command, ["--product", "dsh", "bundled"], { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
+  assert.equal(bundleResult.status, 2);
+  assert.equal(bundleResult.stderr, 'sessionbus-dsh-install: profile "bundled" bundle "@sessionbus/w090-bundle-row" already provides row "sessionbus"\n');
+  const unowned = path.join(home, "profiles", "unowned");
+  mkdirSync(unowned, { recursive: true });
+  writeFileSync(path.join(unowned, "cordis.patch.yml"), "- insert:\n    - { id: sessionbus, name: '@sessionbus/dsh' }\n");
+  const removeResult = spawnSync(command, ["--remove", "unowned"], { encoding: "utf8", env: { ...process.env, DSH_HOME: home } });
+  assert.equal(removeResult.status, 2);
+  assert.equal(removeResult.stderr, 'sessionbus-dsh-install: profile "unowned" row "sessionbus" has no sessionbus-dsh-install ownership marker\n');
 });
