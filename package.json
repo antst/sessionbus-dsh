@@ -1,6 +1,6 @@
 {
   "name": "@sessionbus/dsh",
-  "version": "0.1.0-pre.5",
+  "version": "0.1.0-pre.6",
   "type": "commonjs",
   "main": "plugin.cjs",
   "exports": "./plugin.cjs",
