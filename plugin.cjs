@@ -295,7 +295,12 @@ function createRuntime(ctx, config, dependencies, prepared) {
   let warned = false;
   const warn = (error) => { if (active() && !warned) { warned = true; dependencies.stderr(`sessionbus: ${clean(error)}\n`); } };
   const root = (agent) => ctx.agents.roots().includes(agent);
-  const publicationError = (agent, error) => {
+  const publicationError = (agent, error, record) => {
+    if (record && peers.get(agent) === record) {
+      record.peer?.shutdown();
+      peers.delete(agent);
+      // Leave it unpublished; a later title change may naturally call present() again.
+    }
     if (active() && !publicationErrors.has(agent)) {
       publicationErrors.add(agent);
       dependencies.stderr(`sessionbus: ${clean(error)}\n`);
@@ -306,15 +311,17 @@ function createRuntime(ctx, config, dependencies, prepared) {
     try {
       const current = identity(ctx, agent, values.product, values.groups);
       if (!current) return;
+      const record = { peer: undefined, identity: current, rehello: Promise.resolve() };
       const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values), {
         connect: (socket) => {
           const stream = net.createConnection(socket);
-          stream.once("error", (error) => publicationError(agent, error));
+          stream.once("error", (error) => publicationError(agent, error, record));
           return stream;
         },
       });
-      peers.set(agent, { peer, identity: current, rehello: Promise.resolve() });
-      void peer.closed?.then(() => { if (peer.error) publicationError(agent, peer.error); });
+      record.peer = peer;
+      peers.set(agent, record);
+      void peer.closed?.then(() => { if (peer.error) publicationError(agent, peer.error, record); });
     } catch (error) { publicationError(agent, error); }
   };
   const forget = (agent) => { peers.get(agent)?.peer.shutdown(); peers.delete(agent); };

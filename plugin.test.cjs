@@ -320,9 +320,10 @@ test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", as
   }
 });
 
-test("a rejected peer hello is reported once", async () => {
+test("a rejected peer hello is reported and a later title republishes", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-rejected-"));
   const socket = path.join(directory, "bus.sock");
+  let attempts = 0;
   const server = net.createServer((stream) => {
     let buffer = "";
     stream.on("data", (chunk) => {
@@ -330,7 +331,11 @@ test("a rejected peer hello is reported once", async () => {
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       const frame = JSON.parse(buffer.slice(0, newline));
-      stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, error: { code: -32602, message: "invalid_hello" } })}\n`);
+      attempts++;
+      const response = attempts === 1
+        ? { jsonrpc: "2.0", id: frame.id, error: { code: -32602, message: "invalid_hello" } }
+        : { jsonrpc: "2.0", id: frame.id, result: {} };
+      stream.write(`${JSON.stringify(response)}\n`);
     });
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
@@ -342,7 +347,16 @@ test("a rejected peer hello is reported once", async () => {
   const runtime = createRuntime(ctx, { product: "dsh" }, deps);
   try {
     ctx.ready();
-    await runtime.peers.values().next().value.peer.closed;
+    const rejected = runtime.peers.values().next().value.peer;
+    await rejected.closed;
+    await Promise.resolve();
+    assert.deepEqual(deps.errors, ["sessionbus: invalid_hello\n"]);
+    const root = ctx.roots[0];
+    ctx.emitGlobal("session/event", root.session, { type: "session/title", data: { title: "Now publish" } });
+    const admitted = runtime.peers.get(root).peer;
+    assert.notEqual(admitted, rejected);
+    await admitted.ready;
+    assert.equal(attempts, 2);
     assert.deepEqual(deps.errors, ["sessionbus: invalid_hello\n"]);
   } finally {
     runtime.close();
