@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-pre.5 — 2026-09-20
+
+- A host with dashi installed may register `dashi` as the only product: `sessionbus-dsh-install --product dashi` for the lane profile (W-084).
+- docs/HOST-INSTALL.md: the graph repair is one helper based on exact pins of stale peer-only DSH records; zero DSH records is coherent for lane and web profiles.
+
 ## 0.1.0-pre.4 — 2026-09-19
 
 - Supersedes 0.1.0-pre.3, which was tagged but never published to npm; do not reference it.
