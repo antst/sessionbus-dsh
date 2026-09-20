@@ -1182,7 +1182,11 @@ env -u SESSIONBUS_LAUNCH_TOKEN SESSIONBUS_GROUPS='["peer-dev"]' "$HOST_BIN_DIR/d
 ```
 
 Expected terminal result: the web server stays up without a sessionbus
-configuration error. Open its local URL through the host's approved access
+configuration error. No socket export is needed: peer discovery uses a
+nonempty `SESSIONBUS_SOCKET`, otherwise
+`$XDG_RUNTIME_DIR/sessionbus/presence.sock`, otherwise
+`/tmp/sessionbus-<uid>/presence.sock`. A daemon using a custom socket must set
+`SESSIONBUS_SOCKET` for the launched peer. Open its local URL through the host's approved access
 path and create one root DSH session. That root advertises product `dsh` and
 group `peer-dev`; no profile row supplies the group.
 

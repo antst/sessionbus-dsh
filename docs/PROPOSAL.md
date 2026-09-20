@@ -46,7 +46,7 @@ DSH, and any web profile, which then needs only the plugin row inserted):
 |---|---|---|---|
 | peer groups | `groups: [..]` | `SESSIONBUS_GROUPS` (JSON array) | private group only |
 | lane groups | never | daemon `session.open` | daemon-selected |
-| socket | `socket: <path>` | `SESSIONBUS_SOCKET` | the documented socket path |
+| socket | `socket: <path>` | `SESSIONBUS_SOCKET` | `$XDG_RUNTIME_DIR/sessionbus/presence.sock`, else `/tmp/sessionbus-<uid>/presence.sock` |
 | local key | `local_key: <k>` | `SESSIONBUS_LOCAL_KEY` | no key |
 | launch token | never in config | `SESSIONBUS_LAUNCH_TOKEN` | absent → peer mode |
 

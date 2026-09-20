@@ -20,6 +20,7 @@ class Context {
   constructor() {
     this.fiber = { uid: 1 };
     this.listeners = new Map();
+    this.globalListeners = new WeakSet();
     this.roots = [];
     this.exits = [];
     this.calls = [];
@@ -54,10 +55,12 @@ class Context {
   on(name, call, options = {}) {
     const list = this.listeners.get(name) || [];
     if (options.prepend) list.unshift(call); else list.push(call);
+    if (options.global) this.globalListeners.add(call);
     this.listeners.set(name, list);
     return () => this.listeners.set(name, (this.listeners.get(name) || []).filter((item) => item !== call));
   }
   emit(name, ...values) { for (const call of this.listeners.get(name) || []) call(...values); }
+  emitGlobal(name, ...values) { for (const call of this.listeners.get(name) || []) if (this.globalListeners.has(call)) call(...values); }
   effect(call) { this.dispose = call(); }
 }
 
@@ -204,8 +207,11 @@ test("settings use config, environment, and default precedence", () => {
   });
   assert.deepEqual(settings(ctx, { product: "dsh" }), { mode: "peer", product: "dsh", groups: ["env"], socket: "/env.sock", localKey: "env-key" });
   assert.throws(() => settings(ctx, { product: "dashi", mode: "lane" }), /conflicts/);
-  assert.throws(() => settings(new Context(), { product: "dashi", groups: ["same", "same"] }, { HOME: "/home/test" }), /groups/);
-  assert.equal(settings(new Context(), { product: "dashi" }, { HOME: "/home/test" }).socket, "/home/test/.local/state/sessionbus/run/presence.sock");
+  assert.throws(() => settings(new Context(), { product: "dashi", groups: ["same", "same"] }, {}), /groups/);
+  assert.equal(settings(new Context(), { product: "dashi" }, { SESSIONBUS_SOCKET: "relative.sock" }).socket, path.resolve("relative.sock"));
+  assert.equal(settings(new Context(), { product: "dashi" }, { SESSIONBUS_SOCKET: "/absolute.sock" }).socket, "/absolute.sock");
+  assert.equal(settings(new Context(), { product: "dashi" }, { XDG_RUNTIME_DIR: "/run/user/123" }).socket, "/run/user/123/sessionbus/presence.sock");
+  assert.equal(settings(new Context(), { product: "dashi" }, {}).socket, `/tmp/sessionbus-${process.getuid()}/presence.sock`);
   assert.throws(() => settings(new Context()), /re-run sessionbus-dsh-install --product/u);
   assert.throws(() => settings(new Context(), { product: "Bad_Product" }), /\^\[a-z0-9\]/u);
   const laneContext = new Context();
@@ -312,6 +318,66 @@ test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", as
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a rejected peer hello is reported once", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-rejected-"));
+  const socket = path.join(directory, "bus.sock");
+  const server = net.createServer((stream) => {
+    let buffer = "";
+    stream.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const frame = JSON.parse(buffer.slice(0, newline));
+      stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, error: { code: -32602, message: "invalid_hello" } })}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  const ctx = new Context();
+  agent(ctx, "session-rejected");
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_SOCKET: socket };
+  deps.connectPeer = connectPeer;
+  const runtime = createRuntime(ctx, { product: "dsh" }, deps);
+  try {
+    ctx.ready();
+    await runtime.peers.values().next().value.peer.closed;
+    assert.deepEqual(deps.errors, ["sessionbus: invalid_hello\n"]);
+  } finally {
+    runtime.close();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("peer identity and socket connection failures are visible", async () => {
+  const malformed = new Context();
+  const badRoot = agent(malformed, "session-incomplete");
+  badRoot.session.header.cwd = "";
+  const badDeps = dependencies(malformed);
+  badDeps.ambient = { SESSIONBUS_SOCKET: "/run/sessionbus.sock" };
+  const malformedRuntime = createRuntime(malformed, { product: "dsh" }, badDeps);
+  malformed.ready();
+  assert.deepEqual(badDeps.errors, ["sessionbus: DSH root identity is incomplete\n"]);
+  malformedRuntime.close();
+
+  const ctx = new Context();
+  agent(ctx, "session-connect");
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_SOCKET: path.join(os.tmpdir(), `missing-sessionbus-${process.pid}`, "presence.sock") };
+  let failed, stream;
+  deps.connectPeer = (_identity, _deliver, _environment, options) => {
+    stream = options.connect(deps.ambient.SESSIONBUS_SOCKET);
+    failed = new Promise((resolve) => stream.once("error", resolve));
+    return { caller: deps.workerCaller, closed: new Promise(() => {}), error: null, shutdown: () => stream.destroy() };
+  };
+  const runtime = createRuntime(ctx, { product: "dsh" }, deps);
+  ctx.ready();
+  await failed;
+  assert.equal(deps.errors.length, 1);
+  assert.match(deps.errors[0], /^sessionbus: connect ENOENT /u);
+  runtime.close();
 });
 
 test("kit preserves spawn policy.trace through peer and lane callers", { timeout: 10000 }, async () => {
@@ -624,6 +690,26 @@ test("peer mode tracks roots, re-hellos titles, and binds tools to the executing
   const created = agent(ctx, "session-two");
   ctx.emit("agent/created", { agent: created });
   assert.equal(deps.peers.at(-1).identity.session_id, created.id);
+  runtime.close();
+});
+
+test("web session creation publishes its root through the global lifecycle", async () => {
+  const ctx = new Context();
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_SOCKET: "/run/sessionbus.sock", SESSIONBUS_GROUPS: '["web-proof"]' };
+  const runtime = createRuntime(ctx, { product: "dsh" }, deps);
+  ctx.ready();
+  const created = agent(ctx, "session-web");
+  ctx.emitGlobal("agent/created", { agent: created });
+  assert.deepEqual(deps.peers.map(({ identity }) => identity), [{
+    product: "dsh", session_id: "session-web", groups: ["web-proof"],
+    info: { cwd: "/workspace", model: "provider/default" },
+  }]);
+  ctx.emitGlobal("session/event", created.session, { type: "session/title", data: { title: "Web title" } });
+  await runtime.peers.get(created).rehello;
+  assert.equal(deps.peers[0].identity.name, "Web title");
+  ctx.emitGlobal("agent/disposed", { agent: created });
+  assert.equal(deps.peers[0].stopped, true);
   runtime.close();
 });
 

@@ -1,6 +1,6 @@
 "use strict";
 
-const os = require("node:os");
+const net = require("node:net");
 const path = require("node:path");
 const kit = require("@sessionbus/kit");
 const version = require("./package.json").version;
@@ -66,7 +66,10 @@ function readConfiguration(ctx, config = {}, ambient = process.env) {
   if (config.mode !== undefined && config.mode !== mode) throw new Error(`mode ${config.mode} conflicts with launch environment`);
   let groups = mode === "lane" ? [] : Object.hasOwn(config, "groups") ? config.groups : JSON.parse(value("SESSIONBUS_GROUPS") || "[]");
   if (!Array.isArray(groups) || groups.some((group) => !text(group)) || new Set(groups).size !== groups.length) throw new Error("groups are invalid");
-  const socket = Object.hasOwn(config, "socket") ? config.socket : value("SESSIONBUS_SOCKET") || path.join(value("XDG_STATE_HOME") || path.join(value("HOME") || os.homedir(), ".local/state"), "sessionbus/run/presence.sock");
+  const explicitSocket = Object.hasOwn(config, "socket") ? config.socket : value("SESSIONBUS_SOCKET");
+  const socket = explicitSocket ? path.resolve(explicitSocket) : value("XDG_RUNTIME_DIR")
+    ? path.resolve(value("XDG_RUNTIME_DIR"), "sessionbus/presence.sock")
+    : path.join("/tmp", `sessionbus-${process.getuid()}`, "presence.sock");
   const localKey = Object.hasOwn(config, "local_key") ? config.local_key : value("SESSIONBUS_LOCAL_KEY");
   if (!text(socket) || localKey !== undefined && !text(localKey)) throw new Error("connection settings are invalid");
   return { settings: { mode, product: config.product, groups: [...groups], socket, localKey }, token };
@@ -285,26 +288,40 @@ function createRuntime(ctx, config, dependencies, prepared) {
   let launchToken = configured.token;
   const native = new NativeSession(ctx, dependencies.createUserMessage);
   const peers = new Map();
+  const publicationErrors = new WeakSet();
   let worker;
   let workerExit = Promise.resolve();
   let ready = false;
   let warned = false;
   const warn = (error) => { if (active() && !warned) { warned = true; dependencies.stderr(`sessionbus: ${clean(error)}\n`); } };
   const root = (agent) => ctx.agents.roots().includes(agent);
+  const publicationError = (agent, error) => {
+    if (active() && !publicationErrors.has(agent)) {
+      publicationErrors.add(agent);
+      dependencies.stderr(`sessionbus: ${clean(error)}\n`);
+    }
+  };
   const present = (agent) => {
     if (values.mode !== "peer" || !ready || !root(agent) || peers.has(agent)) return;
     try {
       const current = identity(ctx, agent, values.product, values.groups);
       if (!current) return;
-      const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values));
+      const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values), {
+        connect: (socket) => {
+          const stream = net.createConnection(socket);
+          stream.once("error", (error) => publicationError(agent, error));
+          return stream;
+        },
+      });
       peers.set(agent, { peer, identity: current, rehello: Promise.resolve() });
-    } catch (error) { warn(error); }
+      void peer.closed?.then(() => { if (peer.error) publicationError(agent, peer.error); });
+    } catch (error) { publicationError(agent, error); }
   };
   const forget = (agent) => { peers.get(agent)?.peer.shutdown(); peers.delete(agent); };
   let removeCreated = () => {}, removeDisposed = () => {}, removeTitle = () => {};
   if (values.mode === "peer") {
-    removeCreated = ctx.on("agent/created", ({ agent }) => present(agent));
-    removeDisposed = ctx.on("agent/disposed", ({ agent }) => forget(agent));
+    removeCreated = ctx.on("agent/created", ({ agent }) => present(agent), { global: true });
+    removeDisposed = ctx.on("agent/disposed", ({ agent }) => forget(agent), { global: true });
     removeTitle = ctx.on("session/event", (session, event) => {
       if (event.type !== "session/title") return;
       const agent = ctx.agents.get(session.id);
