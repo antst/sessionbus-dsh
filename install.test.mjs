@@ -73,6 +73,34 @@ test("installer creates only the lane profile and leaves the root patch untouche
   });
 });
 
+test("installer preserves an existing lane manifest and its extra bundle", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-existing-lane-"));
+  const profile = path.join(home, "profiles", "sessionbus");
+  const manifestFile = path.join(profile, "package.json");
+  mkdirSync(profile, { recursive: true });
+  const existing = {
+    name: "owned-lane", private: true, custom: { preserve: "exactly" },
+    dependencies: { "keeper-package": "1.2.3" },
+    dsh: { profile: { bundles: ["keeper-bundle", "@deepseek-ai/dsh-base"], patchReload: "custom" }, keep: true },
+  };
+  writeFileSync(manifestFile, `${JSON.stringify(existing, null, 2)}\n`);
+  writeFileSync(path.join(profile, "cordis.patch.yml"), "[]\n");
+  let runs = 0;
+  const run = () => {
+    runs++;
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    manifest.dependencies["@sessionbus/dsh"] = packageVersion;
+    writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+    return { status: 0 };
+  };
+  install([], { home, run });
+  const installed = readFileSync(manifestFile, "utf8");
+  assert.deepEqual(JSON.parse(installed), { ...existing, dependencies: { ...existing.dependencies, "@sessionbus/dsh": packageVersion } });
+  install([], { home, run });
+  assert.equal(readFileSync(manifestFile, "utf8"), installed);
+  assert.equal(runs, 1);
+});
+
 test("installer adds one profile-local peer row to each named profile", () => {
   const home = mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-peer-home-"));
   for (const name of ["web", "custom"]) {

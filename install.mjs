@@ -141,7 +141,8 @@ export function install(profileNames = [], options = {}) {
     if (!validProfile(name)) throw new Error(`invalid profile name ${JSON.stringify(name)}`);
     const profile = path.join(home, "profiles", name);
     const manifestFile = path.join(profile, "package.json");
-    let manifest = existsSync(manifestFile) ? JSON.parse(readFileSync(manifestFile, "utf8")) : null;
+    const existed = existsSync(manifestFile);
+    let manifest = existed ? JSON.parse(readFileSync(manifestFile, "utf8")) : null;
     if (!manifest?.dependencies?.["@sessionbus/dsh"]) {
       const result = run(["plugin", "--profile", name, "add", "@sessionbus/dsh"]);
       if (result.status !== 0) throw new Error(String(result.stderr || "dsh plugin add failed").trim());
@@ -153,12 +154,18 @@ export function install(profileNames = [], options = {}) {
       if (name !== "web") convergePatch(patch, noUploadsID, noUploadsPatch);
       continue;
     }
-    manifest = {
-      name: "dsh-profile-sessionbus",
-      private: true,
+    if (!existed) manifest = {
+      name: "dsh-profile-sessionbus", private: true,
       dependencies: { "@sessionbus/dsh": manifest.dependencies["@sessionbus/dsh"] },
       dsh: { profile: { bundles: ["@deepseek-ai/dsh-base"], patchReload: "startup" } },
     };
+    else {
+      manifest.dsh ??= {};
+      manifest.dsh.profile ??= {};
+      manifest.dsh.profile.bundles ??= [];
+      if (!Array.isArray(manifest.dsh.profile.bundles)) throw new Error("sessionbus profile bundles must be an array");
+      if (!manifest.dsh.profile.bundles.includes("@deepseek-ai/dsh-base")) manifest.dsh.profile.bundles.push("@deepseek-ai/dsh-base");
+    }
     writeChanged(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
     writeChanged(path.join(profile, "cordis.patch.yml"), profilePatch(laneProduct));
   }

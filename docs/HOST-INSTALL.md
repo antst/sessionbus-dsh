@@ -270,7 +270,7 @@ Expected final line:
 Define one bounded repair for the host and every profile graph. It inspects the
 lock records, promotes every stale DSH peer provider to an exact direct
 dependency in one command, installs that frozen graph, launches the real DSH
-once to heal its shared module fallback, and checks both physical projections.
+once to heal its shared module fallback, and checks the authoritative paths.
 A profile graph with no DSH records is coherent. It never deletes
 `node_modules`, edits or deletes a lockfile, prunes a fallback extra, or runs a
 broad dedupe. The embedded closure checker reads only `HOME` and `DSH_HOME`
@@ -382,12 +382,12 @@ NODE
 check_dsh_graph() {
   graph_root=$1
   target_version=$2
-  physical_required=${3:-false}
+  physical_mode=${3:-optional}
   profile=${4:-headless}
-  node --input-type=module - "$graph_root" "$target_version" "$physical_required" <<'NODE'
+  node --input-type=module - "$graph_root" "$target_version" "$physical_mode" <<'NODE'
 import { join } from 'node:path'
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
-const [root, target, physicalRequired] = process.argv.slice(2)
+const [root, target, physicalMode] = process.argv.slice(2)
 const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
 const records = [...lock.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)].map(([, name, version]) => ({ name, version }))
 const counts = new Map()
@@ -413,17 +413,21 @@ if (existsSync(scope)) for (const entry of readdirSync(scope).sort()) {
     console.log(`DSH physical @deepseek-ai/${entry}@${version} -> ${targetPath}`)
   } catch (error) {
     console.error(`DSH physical @deepseek-ai/${entry}: ${error.message}`)
-    process.exitCode = 1
+    if (physicalMode !== 'report') process.exitCode = 1
   }
 }
 const physicalVersions = [...new Set(physical.map(record => record.version))].sort()
+const physicalCounts = new Map()
+for (const { version } of physical) physicalCounts.set(version, (physicalCounts.get(version) ?? 0) + 1)
+console.log(`DSH physical projection: ${physicalMode === 'report' ? 'REPORTED' : 'ASSERTED'}`)
 console.log(`DSH physical packages: ${physical.length}`)
 console.log(`DSH physical versions: ${physicalVersions.join(', ')}`)
-if (physicalRequired === 'true' && physical.length === 0) {
+for (const [version, count] of [...physicalCounts].sort()) console.log(`DSH physical ${version}: ${count}`)
+if (physicalMode === 'required' && physical.length === 0) {
   console.error(`DSH physical projection is empty: ${root}`)
   process.exitCode = 1
 }
-if (physical.some(record => record.version !== target)) {
+if (physicalMode !== 'report' && physical.some(record => record.version !== target)) {
   console.error(`DSH physical projection is not uniformly ${target}: ${root}`)
   process.exitCode = 1
 }
@@ -435,7 +439,7 @@ NODE
 repair_dsh_graph() {
   graph_root=$1
   target_version=$2
-  physical_required=${3:-false}
+  physical_mode=${3:-optional}
   profile=${4:-headless}
   stale_file=$(mktemp)
   if node --input-type=module - "$graph_root/pnpm-lock.yaml" "$target_version" "$stale_file" <<'NODE'
@@ -461,11 +465,25 @@ NODE
     pnpm --dir "$graph_root" add --save-exact "${pins[@]}"
     pnpm --dir "$graph_root" install --frozen-lockfile
   fi
+  if [ "$physical_mode" = report ]; then
+    node --input-type=module - "$DSH_BIN" "$target_version" <<'NODE'
+import { readFileSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+const [bin, target] = process.argv.slice(2)
+const binDir = dirname(realpathSync.native(bin))
+const anchor = createRequire(join(binDir, 'dsh-anchor.cjs')).resolve('@deepseek-ai/dsh/package.json')
+const version = JSON.parse(readFileSync(anchor, 'utf8')).version
+console.log(`DSH executing install anchor: ${anchor}`)
+console.log(`DSH executing version: ${version}`)
+if (version !== target) process.exitCode = 1
+NODE
+  fi
   "$DSH_BIN" --profile headless --help >/dev/null
   printf '%s\n' 'headless fallback heal exit=0'
-  check_dsh_graph "$graph_root" "$target_version" "$physical_required" "$profile"
+  check_dsh_graph "$graph_root" "$target_version" "$physical_mode" "$profile"
 }
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 if ! sed '/^snapshots:/,$d' "$DSH_INSTALL_DIR/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'host DSH graph has no package records' >&2
   exit 1
@@ -478,14 +496,18 @@ The stopped umka host first reports `233` records: `25` at `0.1.2-rc.1` and
 expected final output is:
 
 ```text
+DSH executing install anchor: <package directory resolved beside the real dsh bin>/package.json
+DSH executing version: 0.1.5-rc.2
 headless fallback heal exit=0
 DSH packages: 231
 DSH versions: 0.1.5-rc.2
 DSH 0.1.5-rc.2: 231
-DSH physical @deepseek-ai/dsh@0.1.5-rc.2 -> <resolved package directory>
+DSH physical @deepseek-ai/dsh@<reported version> -> <resolved package directory>
 <one physical line per top-level DSH package>
-DSH physical packages: 26
-DSH physical versions: 0.1.5-rc.2
+DSH physical projection: REPORTED
+DSH physical packages: <inventory count>
+DSH physical versions: <one or more reported versions>
+DSH physical <version>: <count>
 profile=headless
 expected=<closure count>
 current=<same closure count>
@@ -501,10 +523,14 @@ pnpm 10.28.1 retains already auto-installed peer providers in the lock even
 when their published ranges reject those versions; scoped updates, dedupe, and
 lock pruning do not repair that in-place state. The exact pins are permanent
 manifest dependencies, equivalent to dashi's catalog owning one DSH version.
-Every later host or profile package add calls the same function. Any leftover
-lock or physical version, or any wrong or broken expected fallback link, is
-listed and stops the run with the rollback copy intact. Unexpected fallback
-extras are listed but never deleted.
+Every later host or profile package add calls the same function. For the host,
+the mandatory assertions are a lock uniform at the target, the executing
+install anchor at the target, a successful headless boot, and an exact shared
+fallback closure. Any leftover lock version, wrong executing anchor, failed
+boot, or wrong or broken expected fallback link is listed and stops the run
+with the rollback copy intact. Profile checks additionally require their
+nonempty physical projections to be uniform; the dashi profile must have a
+nonempty projection. Unexpected fallback extras are listed but never deleted.
 
 DSH computes the expected fallback as a first-resolution-wins breadth-first
 walk over dependencies and peers from the executing `dsh` package
@@ -516,22 +542,24 @@ shared fallback; wrong and broken expected links are replaced
 real `dsh --profile headless --help` launch and checks the fallback afterwards.
 
 On a hoisted install, pnpm can leave old unpacked packages in the top-level
-projection even after the lock is uniform. DSH does not load through that
-projection after the shared fallback heals, so it is cosmetic for DSH, but it
-is a hazard for other code anchored at the host project. If the physical check
-finds it, stop and validate the cleanup against an isolated copy of that exact
-layout before applying the proven pnpm 10.28.1 reconciliation:
+projection even after the lock is uniform. That projection is a reported
+inventory, not a host assertion: DSH does not resolve through those old copies
+after the shared fallback heals (D-043), though they remain a hazard for other
+code anchored at the host project. Optional cleanup must first be validated
+against an isolated copy of that exact layout before applying the proven pnpm
+10.28.1 reconciliation:
 
 ```sh
 npx -y pnpm@10.28.1 --dir "$DSH_INSTALL_DIR" install --frozen-lockfile --force
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 ```
 
 Expected output from the isolated hoisted reproduction was a transition from
 `214` rc.1 physical DSH packages to `231` rc.2 packages, an unchanged lockfile
-hash, and byte-identical unrelated package manifests. On the host, the second
-command must end with one physical version, an exact healed fallback, and
-`DSH graph coherent: /home/antst`.
+hash, and byte-identical unrelated package manifests. If this optional cleanup
+is chosen, the second command should report one physical version; the blocking
+checks remain the target lock and executing anchor, successful boot, exact
+healed fallback, and `DSH graph coherent: /home/antst`.
 
 ## 3. Upgrade dashi to alpha.20 in place
 
@@ -542,7 +570,7 @@ host-level `pnpm add` may re-resolve peers:
 cd "$DSH_INSTALL_DIR"
 pnpm add --save-exact @antst/dashi-launcher@0.1.0-alpha.20
 test -x "$DASHI_BIN"
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 ```
 
 Expected output reports launcher `0.1.0-alpha.20`, then a nonzero host DSH
@@ -553,7 +581,7 @@ profile immediately after the add:
 
 ```sh
 "$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0-alpha.20
-repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 true dashi
+repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
 if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'dashi profile DSH graph has no package records' >&2
   exit 1
@@ -578,7 +606,7 @@ launcher and installer find their child `dsh`:
 cd "$DSH_INSTALL_DIR"
 pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.4
 test -x "$HOST_BIN_DIR/sessionbus-dsh"
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 ```
 
 Expected output reports `@sessionbus/dsh 0.1.0-pre.4` and a nonzero host DSH
@@ -591,13 +619,16 @@ prints `declares no dsh.bundle — installed as a plain dependency`; this is
 expected because that lane profile consumes the host DSH graph. Section 5 adds
 the selected model provider's packages to this lane profile and the plain web
 profile before either one runs a model turn.
+Starting with `@sessionbus/dsh@0.1.0-pre.8`, re-running the installer merges its
+dependency, row, and base-bundle entry into the existing profile manifest; it
+does not remove provider packages, other bundles, or other manifest fields.
 
 ```sh
 "$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 false sessionbus
+repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 optional sessionbus
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
 "$DSH_BIN" plugin --profile dashi add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 true dashi
+repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
 "$DSH_BIN" plugin --profile dashi exec sessionbus-dsh-install --product dashi dashi
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @sessionbus/dsh
@@ -622,7 +653,7 @@ group. Re-check its graph immediately after the package add:
 test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" --profile web --dump-default-config >"$ROLLBACK_ROOT/web-default-config.yml"
 "$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2 false web
+repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2 optional web
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
 if grep -Eq '(^|[[:space:]{,])groups:' "$DSH_HOME/profiles/web/cordis.patch.yml"; then
@@ -850,7 +881,7 @@ if [ "$MODEL_PROVIDER" != deepseek-official ]; then
     for package_spec in "${PROVIDER_PACKAGE_SPECS[@]}"; do
       "$DSH_BIN" plugin --profile "$profile_name" add "$package_spec"
     done
-    repair_dsh_graph "$DSH_HOME/profiles/$profile_name" 0.1.5-rc.2 false "$profile_name"
+    repair_dsh_graph "$DSH_HOME/profiles/$profile_name" 0.1.5-rc.2 optional "$profile_name"
   done
 fi
 ```
@@ -983,9 +1014,12 @@ running profiles with the launch token and peer groups explicitly absent:
 
 ```sh
 for profile_name in sessionbus web; do
-  env -u SESSIONBUS_LAUNCH_TOKEN -u SESSIONBUS_GROUPS DSH_HOME="$DSH_HOME" \
+  if ! env -u SESSIONBUS_LAUNCH_TOKEN -u SESSIONBUS_GROUPS DSH_HOME="$DSH_HOME" \
     node "$ROLLBACK_ROOT/check-profile-provider.mjs" \
-    "$profile_name" "$DSH_INSTALL_DIR" "$MODEL_PROVIDER" "$LANE_CWD"
+    "$profile_name" "$DSH_INSTALL_DIR" "$MODEL_PROVIDER" "$LANE_CWD"; then
+    printf 'provider check failed for profile=%s\n' "$profile_name" >&2
+    exit 1
+  fi
 done
 ```
 
