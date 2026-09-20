@@ -60,6 +60,37 @@ assert.equal(events.filter(event => event.type === "approval/asked" && event.dat
 assert.equal(events.some(event => event.type === "turn/end" && event.data?.reason?.kind === "completed"), true);
 NODE
 }
+assert_turn_error_proof() {
+  node --input-type=module - "$1" "$2" "$3" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+
+const [capture, root, token] = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(capture, "utf8"));
+assert.equal(state.hello, true);
+assert.equal(state.helloParams.launch_token, token);
+assert.equal(Object.hasOwn(state.helloParams, "groups"), false);
+assert.equal(state.run.state, "done");
+assert.deepEqual(state.run.result, {
+  outcome: "failed", result: "UNKNOWN: W-086 turn-start fixture failure", native_stop_reason: "error",
+});
+const files = [];
+const walk = directory => {
+  if (!fs.existsSync(directory)) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) walk(target); else if (/session(?:\.v\d+)?\.jsonl$/u.test(entry.name)) files.push(target);
+  }
+};
+walk(root);
+const events = files.flatMap(file => fs.readFileSync(file, "utf8").trim().split("\n").slice(1).map(line => JSON.parse(line)));
+assert.equal(events.some(event => event.type === "user/message"), false);
+assert.equal(events.some(event => event.type === "turn/start"), true);
+assert.equal(events.some(event => event.type === "turn/end" && event.data?.reason?.kind === "error"
+  && event.data.reason.error?.code === "UNKNOWN" && event.data.reason.error?.message === "W-086 turn-start fixture failure"), true);
+NODE
+}
 cleanup() {
   stop_processes
   rm -rf -- "$work"
@@ -105,6 +136,7 @@ EOF
   fi
   pnpm --dir "$home/profiles/$profile" add --save-exact "@deepseek-ai/dsh-llm-replay@$version" "$root/.github/fixtures/ask-all-plugin"
 done
+pnpm --dir "$home/profiles/sessionbus" add --save-exact "$root/.github/fixtures/turn-start-error-plugin"
 
 node --input-type=module - "$home" "$version" <<'NODE'
 import assert from "node:assert/strict";
@@ -149,6 +181,20 @@ dsh_pid=$!
 for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/lane.stdout" "$work/lane.stderr" >&2 2>/dev/null || true; exit 1; fi
 assert_permission_proof "$capture" "$work/lane-sessions" "$token"
+stop_processes
+
+socket="$work/turn-error.sock"
+capture="$work/turn-error-proof.json"
+token="w086-turn-error-$version"
+echo "DSH $version pre-commit turn error proof"
+node "$root/.github/scripts/fake-turn-error-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh &
+server_pid=$!
+for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W086_SESSION_ROOT="$work/turn-error-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" --patch "$root/.github/fixtures/turn-start-error.patch.yml" >"$work/turn-error.stdout" 2>"$work/turn-error.stderr" &
+dsh_pid=$!
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/turn-error.stdout" "$work/turn-error.stderr" >&2 2>/dev/null || true; exit 1; fi
+assert_turn_error_proof "$capture" "$work/turn-error-sessions" "$token"
 stop_processes
 
 DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install" --product dashi

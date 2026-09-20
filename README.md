@@ -72,4 +72,8 @@ installer removes the package first, then strips its managed `sessionbus` and
 `SESSIONBUS_GROUPS` configures peer identities only. Lane membership is owned
 by the daemon; the plugin accepts and does not consume groups in `session.open`.
 
+## Run results
+
+A DSH error before its input commit returns `failed`, native stop reason `error`, and result `<code>: <message>` verbatim from the durable `turn/end`.
+
 See [Lane without a TUI](docs/LANE-WITHOUT-TUI.md) for the daemon launch contract.

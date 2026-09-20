@@ -1,0 +1,6 @@
+{
+  "name": "@sessionbus/w086-turn-start-error",
+  "version": "0.0.0",
+  "type": "commonjs",
+  "main": "plugin.cjs"
+}
