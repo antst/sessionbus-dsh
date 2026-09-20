@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-pre.11 — 2026-09-20
+
+- Peer mode observes DSH root creation globally (web-client roots publish), reports any publication failure on stderr, and discovers the daemon socket the way the daemon does (SESSIONBUS_SOCKET, else XDG_RUNTIME_DIR, else /tmp/sessionbus-<uid>) (W-093).
+
 ## 0.1.0-pre.10 — 2026-09-20
 
 - The installer refuses to add a row that one of the profile's bundles already provides (dashi-app 0.1.0-alpha.20 ships the dashi row) and marks the rows it writes; `--remove` deletes only marked rows (W-090).
