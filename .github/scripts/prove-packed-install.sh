@@ -21,6 +21,7 @@ import path from "node:path";
 
 const [capture, root, token] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(capture, "utf8"));
+const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL";
 assert.equal(state.hello, true);
 assert.equal(state.listed, true);
 if (Object.hasOwn(state, "ready")) assert.equal(state.ready, true);
@@ -29,6 +30,9 @@ if (token !== "") {
   assert.equal(Object.hasOwn(state.helloParams, "groups"), false);
   assert.deepEqual(state.open.request.params.groups, ["lane-primary", "lane-secondary"]);
   assert.equal(typeof state.open.response.result.session_id, "string");
+  assert.equal(state.run.result.result, input);
+  assert.deepEqual(state.deliveryReceipt, { disposition: "injected" });
+  assert.equal(state.deliveryRun.result.result, deliveryInput);
 }
 const files = [];
 const walk = directory => {
@@ -40,6 +44,10 @@ const walk = directory => {
 };
 walk(root);
 const events = files.flatMap(file => fs.readFileSync(file, "utf8").trim().split("\n").slice(1).map(line => JSON.parse(line)));
+assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text" && event.data.content[0].text === input), true);
+assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === input)), true);
+assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text" && event.data.content[0].text === deliveryInput), true);
+assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === deliveryInput)), true);
 const sessionbusCall = events.find(event => event.type === "tool/call" && event.data?.name === "sessionbus");
 assert.ok(sessionbusCall);
 assert.equal(events.some(event => event.type === "tool/result" && event.data?.message?.source?.callId === sessionbusCall.data.callId), true);
@@ -212,9 +220,10 @@ const rpc = async (method, args) => {
 };
 const created = await rpc("session/create", { request: {} });
 await rpc("session/selectModel", { request: { sessionId: created.sessionId, provider: "deepseek-official", model: "deepseek-v4-flash" } });
-await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "Call sessionbus list." }] } });
+await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_INPUT_SENTINEL" }] } });
+await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_DELIVERY_SENTINEL" }] } });
 NODE
-for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"listed":true' "$capture" && grep -Rq '"type":"turn/end"' "$work/web-sessions" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"listed":true' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 2 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 assert_permission_proof "$capture" "$work/web-sessions"
 stop_processes
 

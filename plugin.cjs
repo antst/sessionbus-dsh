@@ -199,7 +199,11 @@ class NativeSession {
 
   async run(cancel, token, input) {
     if (token.Interrupted()) return { outcome: "interrupted", result: "" };
-    const message = this.message(input);
+    // @sessionbus/kit sdk/js/index.js:108-120 passes its text or delivery seed here.
+    const delivery = typeof input?.delivery?.body === "string" ? input.delivery : undefined;
+    const body = typeof input === "string" ? input : typeof input?.text === "string" ? input.text : delivery?.body;
+    if (body === undefined) throw new Error("sessionbus received an unexpected run input seed shape");
+    const message = this.message(body);
     const record = { message, openTurn: null, turn: null, output: "", cancelled: deferred() };
     const receipt = this.receipt(message, this.agent.session, cancel);
     this.active = record;
@@ -211,6 +215,7 @@ class NativeSession {
       try { this.agent.followup(message); }
       catch (error) { receipt.reject(error); throw error; }
       await receipt.promise;
+      if (delivery) await token.ReportDelivery({ disposition: "injected" });
       const idle = this.agent.whenIdle();
       idle.catch(() => {});
       await Promise.race([idle, record.cancelled.promise]);

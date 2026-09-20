@@ -7,6 +7,11 @@
 {"type":"assistant/attempt","seq":5,"time":0,"data":{"turn":1,"step":2,"stream":[{"type":"chunk","time":0,"chunk":{"type":"block-start","index":0,"blockType":"tool-call"}},{"type":"tool-call-chunks","time0":0,"index":0,"dt":[],"id":"w081-dummy-call","name":"w081_dummy","args":["{}"]},{"type":"chunk","time":0,"chunk":{"type":"block-end","index":0,"block":{"type":"tool-call","id":"w081-dummy-call","name":"w081_dummy","arguments":"{}"}}},{"type":"chunk","time":0,"chunk":{"type":"finish","reason":{"kind":"tool-calls"}}}]}}
 {"type":"step/end","data":{"turn":1,"step":2},"seq":6,"time":0}
 {"type":"step/start","data":{"turn":1,"step":3},"seq":7,"time":0}
-{"type":"assistant/attempt","seq":8,"time":0,"data":{"turn":1,"step":3,"stream":[{"type":"chunk","time":0,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"text-chunks","time0":0,"index":0,"dt":[],"texts":["SESSIONBUS_PERMISSION_PROOF"]},{"type":"chunk","time":0,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"SESSIONBUS_PERMISSION_PROOF"}}},{"type":"chunk","time":0,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}
+{"type":"assistant/attempt","seq":8,"time":0,"data":{"turn":1,"step":3,"stream":[{"type":"chunk","time":0,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"text-chunks","time0":0,"index":0,"dt":[],"texts":["{{fromRequest:(W087_INPUT_SENTINEL)}}"]},{"type":"chunk","time":0,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"{{fromRequest:(W087_INPUT_SENTINEL)}}"}}},{"type":"chunk","time":0,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}
 {"type":"step/end","data":{"turn":1,"step":3},"seq":9,"time":0}
 {"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}},"seq":10,"time":0}
+{"type":"turn/start","data":{"turn":2},"seq":11,"time":0}
+{"type":"step/start","data":{"turn":2,"step":1},"seq":12,"time":0}
+{"type":"assistant/attempt","seq":13,"time":0,"data":{"turn":2,"step":1,"stream":[{"type":"chunk","time":0,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"text-chunks","time0":0,"index":0,"dt":[],"texts":["{{fromRequest:(W087_DELIVERY_SENTINEL)}}"]},{"type":"chunk","time":0,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"{{fromRequest:(W087_DELIVERY_SENTINEL)}}"}}},{"type":"chunk","time":0,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}
+{"type":"step/end","data":{"turn":2,"step":1},"seq":14,"time":0}
+{"type":"turn/end","data":{"turn":2,"reason":{"kind":"completed"}},"seq":15,"time":0}
