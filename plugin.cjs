@@ -191,8 +191,12 @@ class NativeSession {
       run.turn = run.openTurn;
     }
     if (event.type === "assistant/message" && run.turn === event.data.turn) run.output += textOf(event.data.message);
-    if (event.type === "turn/end" && run.turn === event.data.turn) {
-      try { run.end = terminal(event.data.reason); }
+    const earlyError = event.type === "turn/end" && run.turn === null && run.openTurn === event.data.turn && event.data.reason?.kind === "error";
+    if (event.type === "turn/end" && (run.turn === event.data.turn || earlyError)) {
+      try {
+        run.end = terminal(event.data.reason);
+        if (earlyError) run.output = `${event.data.reason.error.code}: ${event.data.reason.error.message}`;
+      }
       catch (error) { run.endError = error; }
     }
   }

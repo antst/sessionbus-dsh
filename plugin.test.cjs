@@ -413,6 +413,18 @@ test("unexpected run seed fails before creating native work", async () => {
   assert.equal(followed, false);
 });
 
+test("pre-commit turn error returns the durable DSH failure", async () => {
+  const { ctx, native, deps } = await openedLane();
+  native.followup = (message) => {
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+    ctx.emit("session/event", native.session, { type: "turn/start", data: { turn: 5 } });
+    ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 5, reason: { kind: "error", error: { code: "UNKNOWN", message: "turn-start fixture failed" } } } });
+  };
+  assert.deepEqual(await deps.callbacks.run(new AbortController().signal, { Native: null, Interrupted: () => false }, { text: "never committed" }), {
+    outcome: "failed", native_stop_reason: "error", result: "UNKNOWN: turn-start fixture failed",
+  });
+});
+
 test("input consumed outside a turn fails truthfully only after idle", async () => {
   const { ctx, native, deps } = await openedLane();
   const idle = deferred();
