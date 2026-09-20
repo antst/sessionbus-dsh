@@ -111,10 +111,13 @@ npm install --prefix "$home" --save-exact --before "$release_cutoff" \
 npm install --prefix "$home" --save-exact "@antst/dashi-launcher@0.1.0-alpha.20"
 dsh="$home/node_modules/.bin/dsh"
 
+DSH_HOME="$home" "$dsh" plugin --profile sessionbus add "$root/.github/fixtures/manifest-keeper-bundle"
 for profile in sessionbus web dashi; do
   DSH_HOME="$home" "$dsh" plugin --profile "$profile" add "$tarball"
 done
+cp "$home/profiles/sessionbus/package.json" "$work/lane-manifest-before-install.json"
 DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install"
+cmp -s "$work/lane-manifest-before-install.json" "$home/profiles/sessionbus/package.json"
 DSH_HOME="$home" "$home/profiles/web/node_modules/.bin/sessionbus-dsh-install" --product dsh web
 printf '%s\n' '- insert:' \
   "    - { id: workspace, name: '@deepseek-ai/dsh-workspace' }" \
@@ -152,6 +155,9 @@ const dashi = readPatch("dashi");
 assert.match(lane, /mode: lane/u);
 assert.match(lane, /product: sessionbus-dsh/u);
 assert.match(lane, /dsh-file-uploads-none/u);
+const laneManifest = JSON.parse(fs.readFileSync(`${home}/profiles/sessionbus/package.json`, "utf8"));
+assert.equal(Object.hasOwn(laneManifest.dependencies, "@sessionbus/w088-manifest-keeper"), true);
+assert.deepEqual(laneManifest.dsh.profile.bundles, ["@deepseek-ai/dsh-base", "@sessionbus/w088-manifest-keeper"]);
 assert.match(web, /id: sessionbus/u);
 assert.match(web, /product: dsh/u);
 assert.doesNotMatch(web, /file-uploads-none/u);
