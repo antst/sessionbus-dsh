@@ -373,7 +373,9 @@ test("resume relays writer-held as a plain open failure", async () => {
 
 test("run correlates receipt, turn, output, and terminal", async () => {
   const { ctx, native, deps } = await openedLane();
+  let followed;
   native.followup = (message) => {
+    followed = message;
     ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
     ctx.emit("session/event", native.session, { type: "turn/start", data: { turn: 4 } });
     ctx.emit("session/event", native.session, { type: "user/message", data: message });
@@ -381,9 +383,34 @@ test("run correlates receipt, turn, output, and terminal", async () => {
     ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 4, reason: { kind: "completed" } } });
   };
   const token = { Native: null, Interrupted: () => false };
-  assert.deepEqual(await deps.callbacks.run(new AbortController().signal, token, "hello"), { outcome: "completed", native_stop_reason: "completed", result: "one two" });
+  assert.deepEqual(await deps.callbacks.run(new AbortController().signal, token, { text: "hello" }), { outcome: "completed", native_stop_reason: "completed", result: "one two" });
+  assert.deepEqual(followed.content, [{ type: "text", text: "hello" }]);
   assert.equal(token.Native, null);
   assert.deepEqual(ctx.calls.at(-1), ["idle", native.id]);
+});
+
+test("delivery-backed run seed emits its body as one plain text part", async () => {
+  const { ctx, native, deps } = await openedLane();
+  let followed, reported;
+  native.followup = (message) => {
+    followed = message;
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+    ctx.emit("session/event", native.session, { type: "turn/start", data: { turn: 5 } });
+    ctx.emit("session/event", native.session, { type: "user/message", data: message });
+    ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 5, reason: { kind: "completed" } } });
+  };
+  const token = { Native: null, Interrupted: () => false, ReportDelivery: async (value) => { reported = value; } };
+  await deps.callbacks.run(new AbortController().signal, token, { delivery: { message_id: "message-1", from: { session_id: "source", product: "dsh", groups: [] }, body: "delivered" } });
+  assert.deepEqual(followed.content, [{ type: "text", text: "delivered" }]);
+  assert.deepEqual(reported, { disposition: "injected" });
+});
+
+test("unexpected run seed fails before creating native work", async () => {
+  const { native, deps } = await openedLane();
+  let followed = false;
+  native.followup = () => { followed = true; };
+  await assert.rejects(deps.callbacks.run(new AbortController().signal, { Native: null, Interrupted: () => false }, {}), /unexpected run input seed shape/u);
+  assert.equal(followed, false);
 });
 
 test("input consumed outside a turn fails truthfully only after idle", async () => {
@@ -395,7 +422,7 @@ test("input consumed outside a turn fails truthfully only after idle", async () 
     ctx.emit("session/event", native.session, { type: "user/message", data: message });
   };
   let settled = false;
-  const running = deps.callbacks.run(new AbortController().signal, { Native: null, Interrupted: () => false }, "misordered");
+  const running = deps.callbacks.run(new AbortController().signal, { Native: null, Interrupted: () => false }, { text: "misordered" });
   running.then(() => { settled = true; }, () => { settled = true; });
   await Promise.resolve();
   assert.equal(settled, false);
@@ -448,12 +475,12 @@ test("a missing turn end cannot leak its turn into the next run", async () => {
   };
 
   const firstToken = { Native: null, Interrupted: () => false };
-  const first = deps.callbacks.run(new AbortController().signal, firstToken, "first");
+  const first = deps.callbacks.run(new AbortController().signal, firstToken, { text: "first" });
   deps.callbacks.interrupt(null, firstToken);
   idles[0].resolve();
   assert.deepEqual(await first, { outcome: "interrupted", native_stop_reason: "aborted:user", result: "" });
 
-  const second = deps.callbacks.run(new AbortController().signal, { Native: null, Interrupted: () => false }, "second");
+  const second = deps.callbacks.run(new AbortController().signal, { Native: null, Interrupted: () => false }, { text: "second" });
   let settled = false;
   second.then(() => { settled = true; }, () => { settled = true; });
   await Promise.resolve();
@@ -469,7 +496,7 @@ test("pre-aborted run and active delivery create no native receipt", async () =>
   native.status = "running";
   const cancel = new AbortController();
   cancel.abort(new Error("already cancelled"));
-  await assert.rejects(deps.callbacks.run(cancel.signal, { Native: null, Interrupted: () => false }, "run"), /already cancelled/);
+  await assert.rejects(deps.callbacks.run(cancel.signal, { Native: null, Interrupted: () => false }, { text: "run" }), /already cancelled/);
   await assert.rejects(deps.callbacks.deliver(cancel.signal, { body: "deliver" }), /already cancelled/);
   assert.equal(nativeCalls, 0);
   assert.equal(runtime.native.receipts.size, 0);
@@ -487,14 +514,14 @@ test("throwing followup and steer settle receipts and remove cancel listeners", 
   };
   const runCancel = tracked();
   native.followup = () => { throw new Error("followup failed"); };
-  await assert.rejects(deps.callbacks.run(runCancel, { Native: null, Interrupted: () => false }, "run"), /followup failed/);
+  await assert.rejects(deps.callbacks.run(runCancel, { Native: null, Interrupted: () => false }, { text: "run" }), /followup failed/);
   native.status = "running";
   const deliverCancel = tracked();
   native.steer = () => { throw new Error("steer failed"); };
   await assert.rejects(deps.callbacks.deliver(deliverCancel, { body: "deliver" }), /steer failed/);
   native.followup = () => {};
   const cancelled = new AbortController();
-  const running = deps.callbacks.run(cancelled.signal, { Native: null, Interrupted: () => false }, "cancelled");
+  const running = deps.callbacks.run(cancelled.signal, { Native: null, Interrupted: () => false }, { text: "cancelled" });
   cancelled.abort(new Error("connection lost"));
   await assert.rejects(running, /connection lost/);
   await Promise.resolve();
@@ -511,7 +538,7 @@ test("pre-interrupted run creates no native work and interrupt is exact", async 
   const { ctx, native, deps } = await openedLane();
   let followed = false;
   native.followup = () => { followed = true; };
-  assert.deepEqual(await deps.callbacks.run(new AbortController().signal, { Interrupted: () => true }, "stop"), { outcome: "interrupted", result: "" });
+  assert.deepEqual(await deps.callbacks.run(new AbortController().signal, { Interrupted: () => true }, { text: "stop" }), { outcome: "interrupted", result: "" });
   assert.equal(followed, false);
   deps.callbacks.interrupt(null, { Native: {} });
   assert.deepEqual(ctx.calls.at(-1), ["cancel", { kind: "user" }, { keepInbox: true }]);
@@ -520,10 +547,14 @@ test("pre-interrupted run creates no native work and interrupt is exact", async 
 test("delivery appends while idle and waits for steer receipt while running", async () => {
   const { ctx, native, deps } = await openedLane();
   assert.deepEqual(await deps.callbacks.deliver(null, { body: "idle" }), { disposition: "injected" });
-  assert.deepEqual(ctx.calls.find(([call]) => call === "append").slice(0, 2), ["append", "user/message"]);
+  const appended = ctx.calls.find(([call]) => call === "append");
+  assert.deepEqual(appended.slice(0, 2), ["append", "user/message"]);
+  assert.deepEqual(appended[2].content, [{ type: "text", text: "idle" }]);
   native.status = "running";
-  native.steer = (message) => ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+  let steered;
+  native.steer = (message) => { steered = message; ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } }); };
   assert.deepEqual(await deps.callbacks.deliver(null, { body: "active" }), { disposition: "injected" });
+  assert.deepEqual(steered.content, [{ type: "text", text: "active" }]);
 });
 
 test("close cancels running work, idles, flushes, and closed exits", async () => {
