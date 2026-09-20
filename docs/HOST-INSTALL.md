@@ -70,12 +70,16 @@ Expected output on `umka-dev1` includes:
 ```text
 host user=antst
 host home=/home/antst
-login-path dsh=<not found>
+login-path dsh=/home/antst/node_modules/.bin/dsh
 pnpm=10.28.1
 node=v25.3.0
 npm=11.6.2
 explicit dsh=/home/antst/node_modules/.bin/dsh
 ```
+
+The `login-path dsh` line is observational for the already-prepared task
+shell; the install-location assertions below, not that line, establish the one
+authoritative DSH install.
 
 Inventory the one host install and every profile before changing them:
 
@@ -263,75 +267,94 @@ Expected final line:
 0.1.5-rc.2
 ```
 
-Define one checker and one bounded repair for the host and profile lock graphs.
-The checker accepts any nonzero package count but exactly one DSH version. The
-repair rewrites only package names in the DSH family; it never deletes
-`node_modules`, deletes a lockfile, or runs a broad dedupe:
+Define one bounded repair for the host and every profile lock graph. It inspects
+the package records, promotes every stale DSH peer provider to an exact direct
+dependency in one command, installs that frozen graph, and then requires that
+no record has a version other than the target. A graph with no DSH records is
+already coherent. It never deletes `node_modules`, edits or deletes a lockfile,
+or runs a broad dedupe:
 
 ```sh
-check_dsh_graph() {
-node --input-type=module - "$1" <<'NODE'
-import { readFileSync } from 'node:fs'
-const lockfile = readFileSync(process.argv[2], 'utf8')
-const packageSection = lockfile.split('\nsnapshots:\n', 1)[0] ?? ''
-const records = [...packageSection.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)]
-const versions = [...new Set(records.map(([, , version]) => version))].sort()
-console.log(`DSH packages: ${records.length}`)
-console.log(`DSH versions: ${versions.join(', ')}`)
-if (records.length === 0 || versions.length !== 1 || versions[0] !== '0.1.5-rc.2') process.exit(1)
-NODE
-}
 repair_dsh_graph() {
   graph_root=$1
-  test ! -e "$graph_root/.pnpmfile.cjs"
-  cat >"$graph_root/.pnpmfile.cjs" <<'HOOK'
-const fields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
-module.exports = { hooks: { readPackage(pkg) {
-  for (const field of fields) for (const name of Object.keys(pkg[field] ?? {})) {
-    if (name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) {
-      pkg[field][name] = '0.1.5-rc.2'
-    }
-  }
-  return pkg
-} } }
-HOOK
-  if pnpm --dir "$graph_root" install --lockfile-only --fix-lockfile; then
+  target_version=$2
+  stale_file=$(mktemp)
+  if node --input-type=module - "$graph_root/pnpm-lock.yaml" "$target_version" "$stale_file" <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs'
+const [file, target, staleFile] = process.argv.slice(2)
+const packages = readFileSync(file, 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
+const records = [...packages.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)].map(([, name, version]) => ({ name, version }))
+const counts = new Map()
+for (const { version } of records) counts.set(version, (counts.get(version) ?? 0) + 1)
+const versions = [...counts.keys()].sort()
+console.log(`DSH packages: ${records.length}`)
+console.log(`DSH versions: ${versions.join(', ')}`)
+for (const version of versions) console.log(`DSH ${version}: ${counts.get(version)}`)
+const stale = [...new Set(records.filter(record => record.version !== target).map(record => record.name))].sort()
+writeFileSync(staleFile, stale.length ? `${stale.join('\n')}\n` : '')
+NODE
+  then
     :
   else
     repair_status=$?
-    rm -f "$graph_root/.pnpmfile.cjs"
+    rm -f "$stale_file"
     return "$repair_status"
   fi
-  rm "$graph_root/.pnpmfile.cjs"
-  pnpm --dir "$graph_root" install --frozen-lockfile
-}
-ensure_dsh_graph() {
-  graph_root=$1
-  if check_dsh_graph "$graph_root/pnpm-lock.yaml"; then
+  mapfile -t stale_packages <"$stale_file"
+  rm "$stale_file"
+  if [ "${#stale_packages[@]}" -eq 0 ]; then
     printf 'DSH graph coherent: %s\n' "$graph_root"
-  else
-    printf 'repairing DSH graph only: %s\n' "$graph_root"
-    repair_dsh_graph "$graph_root"
-    check_dsh_graph "$graph_root/pnpm-lock.yaml"
+    return
   fi
+  pins=()
+  for package in "${stale_packages[@]}"; do pins+=("$package@$target_version"); done
+  pnpm --dir "$graph_root" add --save-exact "${pins[@]}"
+  pnpm --dir "$graph_root" install --frozen-lockfile
+  node --input-type=module - "$graph_root/pnpm-lock.yaml" "$target_version" <<'NODE'
+import { readFileSync } from 'node:fs'
+const [file, target] = process.argv.slice(2)
+const packages = readFileSync(file, 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
+const records = [...packages.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)].map(([, name, version]) => ({ name, version }))
+const counts = new Map()
+for (const { version } of records) counts.set(version, (counts.get(version) ?? 0) + 1)
+const versions = [...counts.keys()].sort()
+console.log(`DSH packages: ${records.length}`)
+console.log(`DSH versions: ${versions.join(', ')}`)
+for (const version of versions) console.log(`DSH ${version}: ${counts.get(version)}`)
+const stale = records.filter(record => record.version !== target)
+if (stale.length) {
+  for (const value of [...new Set(stale.map(record => `${record.name}@${record.version}`))].sort()) console.error(value)
+  process.exit(1)
 }
-ensure_dsh_graph "$DSH_INSTALL_DIR"
+NODE
+  printf 'DSH graph coherent: %s\n' "$graph_root"
+}
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2
+if ! sed '/^snapshots:/,$d' "$DSH_INSTALL_DIR/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
+  printf '%s\n' 'host DSH graph has no package records' >&2
+  exit 1
+fi
+printf '%s\n' 'host DSH graph nonzero'
 ```
 
-Expected output is a nonzero, inventory-dependent package count, exactly one
-version, and either the coherent line or one bounded repair followed by the
-same successful check:
+The stopped umka host first reports `233` records: `25` at `0.1.2-rc.1` and
+`208` at `0.1.5-rc.2`. After the one exact-pin command and frozen install, the
+expected final output is:
 
 ```text
-DSH packages: <nonzero count>
+DSH packages: 231
 DSH versions: 0.1.5-rc.2
+DSH 0.1.5-rc.2: 231
 DSH graph coherent: /home/antst
+host DSH graph nonzero
 ```
 
-The explicit conditional is important under `set -e`: a failed first check
-enters the documented DSH-only repair instead of terminating the task shell.
-If `.pnpmfile.cjs` already exists or the second check fails, stop with the
-rollback copy intact.
+pnpm 10.28.1 retains already auto-installed peer providers in the lock even
+when their published ranges reject those versions; scoped updates, dedupe, and
+lock pruning do not repair that in-place state. The exact pins are permanent
+manifest dependencies, equivalent to dashi's catalog owning one DSH version.
+Every later host or profile package add calls the same function. Any leftover
+version is listed and stops the run with the rollback copy intact.
 
 ## 3. Upgrade dashi to alpha.20 in place
 
@@ -342,7 +365,7 @@ host-level `pnpm add` may re-resolve peers:
 cd "$DSH_INSTALL_DIR"
 pnpm add --save-exact @antst/dashi-launcher@0.1.0-alpha.20
 test -x "$DASHI_BIN"
-ensure_dsh_graph "$DSH_INSTALL_DIR"
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2
 ```
 
 Expected output reports launcher `0.1.0-alpha.20`, then a nonzero host DSH
@@ -353,15 +376,20 @@ profile immediately after the add:
 
 ```sh
 "$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0-alpha.20
-ensure_dsh_graph "$DSH_HOME/profiles/dashi"
+repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2
+if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
+  printf '%s\n' 'dashi profile DSH graph has no package records' >&2
+  exit 1
+fi
+printf '%s\n' 'dashi profile DSH graph nonzero'
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @antst/dashi-app @sessionbus/dsh
 ```
 
-Expected output contains `@antst/dashi-app 0.1.0-alpha.20` and a nonzero DSH
-package count at the single version `0.1.5-rc.2`. The count `11` was observed
-in a clean rebuilt profile, but it is inventory only and is never an acceptance
-criterion. The pre-existing `@sessionbus/dsh` row remains at its old version
-until the next section.
+Expected output contains `dashi profile DSH graph nonzero`,
+`@antst/dashi-app 0.1.0-alpha.20`, and a DSH package count at the single version
+`0.1.5-rc.2`. The count `11` was observed in a clean rebuilt profile, but it is
+inventory only and is never an acceptance criterion. The pre-existing
+`@sessionbus/dsh` row remains at its old version until the next section.
 
 ## 4. Upgrade sessionbus-dsh and its profiles
 
@@ -373,7 +401,7 @@ launcher and installer find their child `dsh`:
 cd "$DSH_INSTALL_DIR"
 pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.4
 test -x "$HOST_BIN_DIR/sessionbus-dsh"
-ensure_dsh_graph "$DSH_INSTALL_DIR"
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2
 ```
 
 Expected output reports `@sessionbus/dsh 0.1.0-pre.4` and a nonzero host DSH
@@ -381,14 +409,16 @@ count at the single version `0.1.5-rc.2`.
 
 Upgrade both installed profiles in place. Re-running the installer repairs the
 old rows by adding their required stable products: `sessionbus-dsh` for the
-lane profile and `dashi` for the dashi peer profile.
+lane profile and `dashi` for the dashi peer profile. The sessionbus profile add
+prints `declares no dsh.bundle — installed as a plain dependency`; this is
+expected because that lane profile consumes the host DSH graph.
 
 ```sh
 "$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.4
-ensure_dsh_graph "$DSH_HOME/profiles/sessionbus"
+repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
 "$DSH_BIN" plugin --profile dashi add @sessionbus/dsh@0.1.0-pre.4
-ensure_dsh_graph "$DSH_HOME/profiles/dashi"
+repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2
 "$DSH_BIN" plugin --profile dashi exec sessionbus-dsh-install --product dashi dashi
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @sessionbus/dsh
@@ -396,8 +426,9 @@ grep -F 'config: { mode: lane, product: sessionbus-dsh }' "$DSH_HOME/profiles/se
 grep -F 'config: { product: dashi }' "$DSH_HOME/profiles/dashi/cordis.patch.yml"
 ```
 
-Expected output contains `@sessionbus/dsh 0.1.0-pre.4` for both profiles,
-nonzero single-version rc.2 graphs, and these exact repaired rows:
+Expected output contains `@sessionbus/dsh 0.1.0-pre.4` for both profiles, no DSH
+version other than rc.2 in either graph (the lane graph may have zero DSH
+records), and these exact repaired rows:
 
 ```text
 config: { mode: lane, product: sessionbus-dsh }
@@ -412,7 +443,7 @@ group. Re-check its graph immediately after the package add:
 test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" --profile web --dump-default-config >"$ROLLBACK_ROOT/web-default-config.yml"
 "$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.4
-ensure_dsh_graph "$DSH_HOME/profiles/web"
+repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
 if grep -Eq '(^|[[:space:]{,])groups:' "$DSH_HOME/profiles/web/cordis.patch.yml"; then
@@ -422,8 +453,8 @@ fi
 printf '%s\n' 'web profile has no configured groups'
 ```
 
-Expected output contains one nonzero rc.2 graph, the exact peer row below, and
-the no-groups confirmation:
+Expected output contains no DSH version other than rc.2 (zero DSH records is
+valid), the exact peer row below, and the no-groups confirmation:
 
 ```text
 config: { product: dsh }
