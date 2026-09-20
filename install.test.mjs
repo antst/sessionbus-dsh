@@ -23,7 +23,7 @@ test("installer creates only the lane profile and leaves the root patch untouche
   };
   const rootPatch = "# product-owned peer configuration\n- insert:\n    - { id: product-peer, name: product-peer }\n";
   writeFileSync(path.join(home, "cordis.patch.yml"), rootPatch);
-  install([], { home, root, run });
+  install(["sessionbus"], { home, root, run, product: "sessionbus-dsh" });
   const first = {
     manifest: readFileSync(path.join(home, "profiles", "sessionbus", "package.json"), "utf8"),
     profile: readFileSync(path.join(home, "profiles", "sessionbus", "cordis.patch.yml"), "utf8"),
@@ -36,6 +36,12 @@ test("installer creates only the lane profile and leaves the root patch untouche
     profile: readFileSync(path.join(home, "profiles", "sessionbus", "cordis.patch.yml"), "utf8"),
     peer: readFileSync(path.join(home, "cordis.patch.yml"), "utf8"),
   }, first);
+  install(["sessionbus"], { home, root, run, product: "dashi" });
+  const repaired = readFileSync(path.join(home, "profiles", "sessionbus", "cordis.patch.yml"), "utf8");
+  assert.equal(repaired, first.profile.replace("product: sessionbus-dsh", "product: dashi"));
+  install(["sessionbus"], { home, root, run, product: "dashi" });
+  assert.equal(readFileSync(path.join(home, "profiles", "sessionbus", "cordis.patch.yml"), "utf8"), repaired);
+  assert.equal(runs, 1);
   assert.equal(first.peer, rootPatch);
   assert.equal(first.profile, `- id: system-prompt
   config:
@@ -112,7 +118,7 @@ test("installer repairs a block row without changing neighboring text", () => {
 
 test("installer requires and validates a stable peer product", () => {
   assert.throws(() => install(["web"], { home: "/unused" }), /--product is required/u);
-  assert.throws(() => install(["sessionbus"], { home: "/unused", product: "dsh" }), /must be sessionbus-dsh/u);
+  assert.throws(() => install(["sessionbus"], { home: "/unused", product: "dsh" }), /must be sessionbus-dsh or dashi/u);
   for (const product of ["Dashi", "bad_name", "x".repeat(33)]) {
     assert.throws(() => install(["web"], { home: "/unused", product }), /\^\[a-z0-9\]/u);
   }

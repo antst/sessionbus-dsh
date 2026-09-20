@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-const profilePatch = `- id: system-prompt
+const profilePatch = (product) => `- id: system-prompt
   config:
     persona: >-
       You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
@@ -26,7 +26,7 @@ const profilePatch = `- id: system-prompt
     - { id: session-controller, name: '@deepseek-ai/dsh-api-session-controller' }
     - id: sessionbus
       name: '@sessionbus/dsh'
-      config: { mode: lane, product: sessionbus-dsh }
+      config: { mode: lane, product: ${product} }
 `;
 const peerPatch = (product) => `- insert:
     - { id: sessionbus, name: '@sessionbus/dsh', config: { product: ${product} } }
@@ -133,8 +133,9 @@ export function install(profileNames = [], options = {}) {
   const root = options.root || path.dirname(fileURLToPath(import.meta.url));
   const run = options.run || ((args) => spawnSync("dsh", args, { cwd: root, encoding: "utf8" }));
   const names = [...new Set(profileNames.length ? profileNames : ["sessionbus"])];
+  const laneProduct = options.product ?? "sessionbus-dsh";
   if (options.product !== undefined && (typeof options.product !== "string" || !productPattern.test(options.product))) throw new Error(`invalid product ${JSON.stringify(options.product)}; expected ^[a-z0-9][a-z0-9-]{0,31}$`);
-  if (names.includes("sessionbus") && options.product !== undefined && options.product !== "sessionbus-dsh") throw new Error("the sessionbus profile product must be sessionbus-dsh");
+  if (names.includes("sessionbus") && !["sessionbus-dsh", "dashi"].includes(laneProduct)) throw new Error("the sessionbus profile product must be sessionbus-dsh or dashi");
   if (names.some((name) => name !== "sessionbus") && options.product === undefined) throw new Error("--product is required for peer profiles");
   for (const name of names) {
     if (!validProfile(name)) throw new Error(`invalid profile name ${JSON.stringify(name)}`);
@@ -159,7 +160,7 @@ export function install(profileNames = [], options = {}) {
       dsh: { profile: { bundles: ["@deepseek-ai/dsh-base"], patchReload: "startup" } },
     };
     writeChanged(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
-    writeChanged(path.join(profile, "cordis.patch.yml"), profilePatch);
+    writeChanged(path.join(profile, "cordis.patch.yml"), profilePatch(laneProduct));
   }
 }
 

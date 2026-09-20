@@ -20,11 +20,21 @@ lifetime (trusted host).
 See [Installing a DSH lane host](docs/HOST-INSTALL.md) for the complete
 preflight, installation, verification, and rollback procedure.
 
-Create the base-only lane profile with:
+Create the base-only lane profile for the package-owned `sessionbus-dsh`
+product with:
 
 ```sh
 dsh plugin --profile sessionbus add @sessionbus/dsh && dsh plugin --profile sessionbus exec sessionbus-dsh-install
 ```
+
+On a host that already uses dashi, one product can own both peers and lanes:
+
+```sh
+dsh plugin --profile sessionbus add @sessionbus/dsh && dsh plugin --profile sessionbus exec sessionbus-dsh-install --product dashi
+```
+
+In that form `SESSIONBUS_PRODUCTS` contains `dashi`, not `sessionbus-dsh`,
+and the daemon maps it to `@antst/dashi-launcher`'s `dashi` bin.
 
 Add the peer plugin to another profile, such as `web`, with:
 
@@ -41,12 +51,12 @@ operator-chosen identifier matching `^[a-z0-9][a-z0-9-]{0,31}$`.
 Non-web profiles also receive the no-upload provider required by DSH's Session
 Controller; ordinary text prompts work while file-upload receipts are rejected.
 
-Register the daemon's `sessionbus-dsh` product command as the package's
-`sessionbus-dsh` bin. With a launch token it selects the installed `sessionbus`
-profile; without one it forwards arguments to `dsh` unchanged.
-The daemon finds that command on `PATH`, so install this package alongside
-`dsh` at the host level too—for example, run `pnpm add @sessionbus/dsh` in the
-directory where `dsh` is installed—so both bins share one `node_modules/.bin`.
+For the two-product form, register the daemon's `sessionbus-dsh` product as the
+package's `sessionbus-dsh` bin. For the one-product form, register only `dashi`
+as the `dashi` bin. Both launchers select the installed `sessionbus` profile
+when given a launch token. Install the selected launcher alongside `dsh` at the
+host level and put their shared `node_modules/.bin` on the daemon service's
+`PATH`; the `dashi` launcher resolves its child `dsh` by name.
 
 Uninstall without invoking DSH by running the installed bin from the profile:
 
