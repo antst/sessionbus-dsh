@@ -43,11 +43,25 @@ const walk = directory => {
   }
 };
 walk(root);
-const events = files.flatMap(file => fs.readFileSync(file, "utf8").trim().split("\n").slice(1).map(line => JSON.parse(line)));
+const logs = files.map(file => fs.readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line)));
+const events = logs.flatMap(records => records.slice(1));
+if (token === "") {
+  assert.equal(state.hellos.length, 2);
+  assert.deepEqual(state.hellos.map(({ product, session_id, name, groups }) => ({ product, session_id, name, groups })), [
+    { product: "dsh", session_id: state.hellos[0].session_id, name: undefined, groups: ["web-proof"] },
+    { product: "dsh", session_id: state.hellos[0].session_id, name: "W089 renamed", groups: ["web-proof"] },
+  ]);
+  assert.equal(logs.some(([header]) => header.id === state.hellos[0].session_id), true);
+  assert.deepEqual(state.listedIdentity, {
+    session_id: state.hellos[0].session_id, kind: "peer", product: "dsh", name: "W089 renamed",
+    groups: ["web-proof"], connected: true, running: true, info: state.hellos[1].info,
+  });
+  assert.deepEqual(state.peerDeliveryReceipt, { disposition: "injected" });
+}
 assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text" && event.data.content[0].text === input), true);
-assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === input)), true);
 assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text" && event.data.content[0].text === deliveryInput), true);
 assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === deliveryInput)), true);
+if (token !== "") assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === input)), true);
 const sessionbusCall = events.find(event => event.type === "tool/call" && event.data?.name === "sessionbus");
 assert.ok(sessionbusCall);
 assert.equal(events.some(event => event.type === "tool/result" && event.data?.message?.source?.callId === sessionbusCall.data.callId), true);
@@ -173,6 +187,7 @@ console.log(JSON.stringify({ version, plugin, profiles: "PASS", packedInstall: "
 NODE
 
 fixture="$root/.github/fixtures/sessionbus-tool-call.jsonl"
+peer_fixture="$root/.github/fixtures/sessionbus-peer-rehello.jsonl"
 proof_patch="$root/.github/fixtures/sessionbus-tool-call.patch.yml"
 
 socket="$work/lane.sock"
@@ -240,7 +255,7 @@ echo "DSH $version web peer permission proof"
 node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dsh peer &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
-DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/web-sessions" SESSIONBUS_SOCKET="$socket" "$dsh" --profile web --patch "$proof_patch" --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
+DSH_HOME="$home" DSH_SNAPSHOT_FILE="$peer_fixture" DSH_W081_SESSION_ROOT="$work/web-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_GROUPS='["web-proof"]' "$dsh" --profile web --patch "$proof_patch" --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
 dsh_pid=$!
 ready=false
 for _ in $(seq 1 200); do
@@ -272,10 +287,10 @@ const rpc = async (method, args) => {
 };
 const created = await rpc("session/create", { request: {} });
 await rpc("session/selectModel", { request: { sessionId: created.sessionId, provider: "deepseek-official", model: "deepseek-v4-flash" } });
+await rpc("session/rename", { request: { sessionId: created.sessionId, title: "W089 renamed" } });
 await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_INPUT_SENTINEL" }] } });
-await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_DELIVERY_SENTINEL" }] } });
 NODE
-for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"listed":true' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 2 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"peerDeliveryReceipt"' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 1 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 assert_permission_proof "$capture" "$work/web-sessions"
 stop_processes
 

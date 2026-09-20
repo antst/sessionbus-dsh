@@ -25,7 +25,7 @@ class Context {
     this.calls = [];
     this.registeredTools = new Map();
     this.titles = new Map();
-    this.agents = { roots: () => [...this.roots], get: (id) => this.roots.find((agent) => agent.session.id === id) };
+    this.agents = { roots: () => [...this.roots], get: (id) => this.roots.find((agent) => agent.session?.id === id) };
     this.appReady = { onReady: (call) => { this.ready = call; return () => { this.ready = null; }; } };
     this.appExit = (code) => { this.exits.push(code); };
     this.sessionTitle = { get: (session) => this.titles.get(session) };
@@ -135,7 +135,13 @@ function dependencies(ctx) {
         deliver,
         environment,
         identity,
-        rehello: async (next) => { peer.rehelloed = next; },
+        rehello: async (signal, name, info) => {
+          assert.equal(signal, undefined);
+          peer.rehelloed = { name, info };
+          peer.identity = { ...peer.identity, info };
+          if (name === undefined) delete peer.identity.name; else peer.identity.name = name;
+        },
+        replace: async (next) => { peer.replaced = next; peer.identity = next; },
         shutdown: () => { peer.stopped = true; },
       };
       result.peers.push(peer);
@@ -260,20 +266,25 @@ test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", as
   const socket = path.join(directory, "bus.sock");
   let resolveHello, rejectHello;
   const hello = new Promise((resolve, reject) => { resolveHello = resolve; rejectHello = reject; });
+  const hellos = [];
   const server = net.createServer((stream) => {
     let buffer = "";
     stream.on("error", () => {});
     stream.on("data", (chunk) => {
       buffer += chunk;
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) return;
-      const frame = JSON.parse(buffer.slice(0, newline));
-      try {
-        assert.equal(frame.method, "session.hello");
-        assert.deepEqual(frame.params.groups, ["alpha", "beta"]);
-        stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} })}\n`);
-        resolveHello(frame);
-      } catch (error) { rejectHello(error); }
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const frame = JSON.parse(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        try {
+          assert.equal(frame.method, "session.hello");
+          assert.deepEqual(frame.params.groups, ["alpha", "beta"]);
+          hellos.push(frame.params);
+          stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} })}\n`);
+          if (hellos.length === 2) resolveHello();
+        } catch (error) { rejectHello(error); }
+      }
     });
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
@@ -286,8 +297,16 @@ test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", as
   try {
     ctx.ready();
     const peer = runtime.peers.get(root).peer;
-    await Promise.all([hello, peer.ready]);
+    await peer.ready;
     assert.deepEqual(peer.identity.groups, ["alpha", "beta"]);
+    ctx.emit("session/event", root.session, { type: "session/title", data: { title: "Renamed" } });
+    await runtime.peers.get(root).rehello;
+    assert.deepEqual(deps.errors, []);
+    await hello;
+    assert.deepEqual(hellos, [
+      { protocol: 1, product: "dsh", session_id: root.id, groups: ["alpha", "beta"], info: { cwd: "/workspace", model: "provider/default" } },
+      { protocol: 1, product: "dsh", session_id: root.id, name: "Renamed", groups: ["alpha", "beta"], info: { cwd: "/workspace", model: "provider/default" } },
+    ]);
   } finally {
     runtime.close();
     await new Promise((resolve) => server.close(resolve));
@@ -596,11 +615,38 @@ test("peer mode tracks roots, re-hellos titles, and binds tools to the executing
   ctx.emit("session/event", one.session, { type: "session/title", data: { title: "Renamed" } });
   await Promise.resolve();
   assert.deepEqual(deps.peers[0].rehelloed, { name: "Renamed", info: { cwd: "/workspace", model: "provider/default" } });
+  ctx.emit("session/event", one.session, { type: "session/title", data: { title: "" } });
+  await runtime.peers.get(one).rehello;
+  assert.deepEqual(deps.peers[0].rehelloed, { name: undefined, info: { cwd: "/workspace", model: "provider/default" } });
+  assert.equal(Object.hasOwn(deps.peers[0].identity, "name"), false);
   ctx.emit("agent/disposed", { agent: one });
   assert.equal(deps.peers[0].stopped, true);
   const created = agent(ctx, "session-two");
   ctx.emit("agent/created", { agent: created });
   assert.equal(deps.peers.at(-1).identity.session_id, created.id);
+  runtime.close();
+});
+
+test("peer waits for a native session id and replaces it atomically when it changes", async () => {
+  const ctx = new Context();
+  const one = agent(ctx, "session-one");
+  const session = one.session;
+  one.session = undefined;
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_SOCKET: "/run/sessionbus.sock", SESSIONBUS_GROUPS: '["team"]' };
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  assert.equal(deps.peers.length, 0);
+  assert.deepEqual(deps.errors, []);
+  one.session = session;
+  ctx.emit("agent/created", { agent: one });
+  assert.equal(deps.peers.length, 1);
+  one.session.id = "session-authoritative";
+  ctx.emit("session/event", one.session, { type: "session/title", data: { title: "Bound" } });
+  await runtime.peers.get(one).rehello;
+  assert.deepEqual(deps.peers[0].replaced, {
+    product: "dashi", session_id: "session-authoritative", name: "Bound", groups: ["team"], info: { cwd: "/workspace", model: "provider/default" },
+  });
   runtime.close();
 });
 
@@ -636,7 +682,12 @@ test("peer title re-hellos are serialized and finish on the newest title", async
     identity,
     caller: deps.workerCaller,
     shutdown() {},
-    async rehello(next) { const position = titles.push(next.name) - 1; await acknowledgements[position].promise; this.identity = { ...this.identity, ...next }; },
+    async rehello(signal, name, info) {
+      assert.equal(signal, undefined);
+      const position = titles.push(name) - 1;
+      await acknowledgements[position].promise;
+      this.identity = { ...this.identity, name, info };
+    },
   });
   const runtime = createRuntime(ctx, { product: "dashi" }, deps);
   ctx.ready();
