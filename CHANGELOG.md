@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-pre.6 — 2026-09-20
+
+- Supersedes 0.1.0-pre.5, which was tagged but never published to npm (release runner npm too old for trusted publishing; W-085).
+- A host with dashi installed may register `dashi` as the only product: `sessionbus-dsh-install --product dashi` for the lane profile (W-084).
+- Release workflow publishes through npm trusted publishing on npm 11.5+ (W-085).
+
 ## 0.1.0-pre.5 — 2026-09-20
 
 - A host with dashi installed may register `dashi` as the only product: `sessionbus-dsh-install --product dashi` for the lane profile (W-084).
