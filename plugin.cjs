@@ -268,13 +268,14 @@ class NativeSession {
 }
 
 function identity(ctx, agent, product, groups, title) {
-  const sessionID = String(agent?.session?.id || agent?.id || "");
+  const sessionID = String(agent?.session?.id || "");
+  if (!text(sessionID)) return;
   const cwd = agent?.session?.header?.cwd;
-  if (!text(sessionID) || !text(cwd)) throw new Error("DSH root identity is incomplete");
+  if (!text(cwd)) throw new Error("DSH root identity is incomplete");
   const current = title === undefined ? ctx.sessionTitle.get(agent.session)?.title : title;
   const provider = agent.options?.provider;
   const model = agent.options?.model;
-  return { product, session_id: sessionID, name: text(current) ? current : sessionID, groups: [...groups], info: { cwd, ...(text(provider) && text(model) ? { model: `${provider}/${model}` } : {}) } };
+  return { product, session_id: sessionID, ...(text(current) ? { name: current } : {}), groups: [...groups], info: { cwd, ...(text(provider) && text(model) ? { model: `${provider}/${model}` } : {}) } };
 }
 
 function createRuntime(ctx, config, dependencies, prepared) {
@@ -294,6 +295,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
     if (values.mode !== "peer" || !ready || !root(agent) || peers.has(agent)) return;
     try {
       const current = identity(ctx, agent, values.product, values.groups);
+      if (!current) return;
       const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values));
       peers.set(agent, { peer, identity: current, rehello: Promise.resolve() });
     } catch (error) { warn(error); }
@@ -307,10 +309,14 @@ function createRuntime(ctx, config, dependencies, prepared) {
       if (event.type !== "session/title") return;
       const agent = ctx.agents.get(session.id);
       const record = peers.get(agent);
-      if (!record || agent.session !== session) return;
+      if (!agent || agent.session !== session) return;
+      if (!record) return present(agent);
       const next = identity(ctx, agent, values.product, values.groups, event.data.title);
+      if (!next) return;
+      const replace = next.session_id !== record.identity.session_id;
       record.identity = next;
-      record.rehello = record.rehello.then(() => record.peer.rehello({ name: next.name, info: next.info })).catch(warn);
+      // kit rehello is (signal, name, info); a changed durable id needs a full replacement.
+      record.rehello = record.rehello.then(() => replace ? record.peer.replace(next) : record.peer.rehello(undefined, next.name, next.info)).catch(warn);
     }, { global: true });
   }
   const caller = (agent) => worker && native.agent === agent ? worker.caller : peers.get(agent)?.peer.caller;
