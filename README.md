@@ -64,6 +64,9 @@ host level and put their shared `node_modules/.bin` on the daemon service's
 
 Without an explicit socket, peers use `$XDG_RUNTIME_DIR/sessionbus/presence.sock`
 or `/tmp/sessionbus-<uid>/presence.sock`, matching the daemon's discovery rule.
+Set `SESSIONBUS_DSH_TRACE=1` to write one-line mode, readiness, root-lifecycle,
+publication-gate, and socket-connection diagnostics to stderr; tracing is off
+by default.
 
 Uninstall without invoking DSH by running the installed bin from the profile:
 

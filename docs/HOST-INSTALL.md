@@ -1190,20 +1190,24 @@ nonempty `SESSIONBUS_SOCKET`, otherwise
 path and create one root DSH session. That root advertises product `dsh` and
 group `peer-dev`; no profile row supplies the group.
 
-From a different authenticated peer on the real daemon, list and message that
-exact web session:
+Launch a different authenticated observer peer on the real daemon with the
+same `SESSIONBUS_GROUPS='["peer-dev"]'` setting (or otherwise join it to
+`peer-dev`), then list and message that exact web session. `list` shows only
+peers that share at least one group with its caller:
 
 ```json
 {"action":"list","arguments":{}}
 {"action":"send","arguments":{"target":"RETURNED_DSH_SESSION_ID","message":"Reply through sessionbus to ORIGINATING_SESSION_ID with exactly: peer hello"}}
 ```
 
-Expected results: `list` discovers the new `dsh` peer with `peer-dev` among its
-groups. Replace `ORIGINATING_SESSION_ID` with that caller's authenticated
-`self_info.session_id`, then `send` returns a successful delivery receipt. A
-receipt proves admission, not model consumption. In the web UI for that exact
-session, submit `Carry out the preceding Sessionbus request now.` The agent
-uses its installed `sessionbus` tool, and the originating peer receives
+Expected results: the same-group observer's `list` discovers the new `dsh`
+peer with `peer-dev` among its groups. Replace `ORIGINATING_SESSION_ID` with
+that caller's authenticated `self_info.session_id`, then `send` returns a
+successful delivery receipt. A receipt proves admission, not model
+consumption. Through the authenticated web RPC, call `session/prompt` for that
+exact session with the text `Carry out the preceding Sessionbus request now.`
+An idle web peer stages the delivery until this turn. Assert that the agent
+uses its installed `sessionbus` tool and that the originating peer receives
 `peer hello` from the authenticated `dsh` session on the real bus.
 
 If a send has uncertain admission, preserve its delivery ID, receipt, and
