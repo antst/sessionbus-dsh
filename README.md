@@ -48,8 +48,10 @@ The installer writes only profile-local rows and leaves an existing
 `sessionbus` row's other fields unchanged while adding or updating its required
 `product`. With no profile arguments it configures only the `sessionbus` lane
 profile and derives product `sessionbus-dsh`. Use product `dashi` for the dashi
-profile, `dsh` for a standalone web or custom peer profile, or another stable
-operator-chosen identifier matching `^[a-z0-9][a-z0-9-]{0,31}$`.
+lane variant, `dsh` for a standalone web or custom peer profile, or another
+stable operator-chosen identifier matching `^[a-z0-9][a-z0-9-]{0,31}$`.
+`@antst/dashi-app@0.1.0-alpha.20` and later own their dashi-profile row and
+exact plugin dependency; do not run this installer against that profile.
 Non-web profiles also receive the no-upload provider required by DSH's Session
 Controller; ordinary text prompts work while file-upload receipts are rejected.
 
@@ -69,7 +71,8 @@ pnpm --dir "$DSH_HOME/profiles/web" exec sessionbus-dsh-install --remove web
 When the DSH CLI works, `dsh plugin --profile web exec
 sessionbus-dsh-install --remove web` is the equivalent convenience form. The
 installer removes the package first, then strips its managed `sessionbus` and
-`file-uploads-none` rows.
+`file-uploads-none` rows. Managed rows carry an ownership comment; removal
+refuses a matching unmarked row instead of deleting someone else's config.
 
 `SESSIONBUS_GROUPS` configures peer identities only. Lane membership is owned
 by the daemon; the plugin accepts and does not consume groups in `session.open`.

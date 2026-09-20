@@ -14,5 +14,5 @@ try {
   else install(profiles, { product });
 } catch (error) {
   process.stderr.write(`sessionbus-dsh-install: ${error.message}\n`);
-  process.exitCode = 1;
+  process.exitCode = error.exitCode ?? 1;
 }
