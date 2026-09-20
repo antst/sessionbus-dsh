@@ -19,6 +19,8 @@ lifetime (trusted host).
 
 See [Installing a DSH lane host](docs/HOST-INSTALL.md) for the complete
 preflight, installation, verification, and rollback procedure.
+Its provider-parity step must be completed for both the lane and plain peer
+profiles before either one runs a model turn.
 
 Create the base-only lane profile for the package-owned `sessionbus-dsh`
 product with:
