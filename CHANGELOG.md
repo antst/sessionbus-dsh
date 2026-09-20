@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-pre.9 — 2026-09-20
+
+- Peer mode publishes only with the native session id, updates titles through the kit's rehello(signal, name, info), and replaces the identity when the durable session id changes; the fake daemon enforces the daemon's identity rules (W-089).
+
 ## 0.1.0-pre.8 — 2026-09-20
 
 - The installer merges into an existing lane profile manifest and preserves every other dependency, bundle and field (W-088).
