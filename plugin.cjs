@@ -72,7 +72,7 @@ function readConfiguration(ctx, config = {}, ambient = process.env) {
     : path.join("/tmp", `sessionbus-${process.getuid()}`, "presence.sock");
   const localKey = Object.hasOwn(config, "local_key") ? config.local_key : value("SESSIONBUS_LOCAL_KEY");
   if (!text(socket) || localKey !== undefined && !text(localKey)) throw new Error("connection settings are invalid");
-  return { settings: { mode, product: config.product, groups: [...groups], socket, localKey }, token };
+  return { settings: { mode, product: config.product, groups: [...groups], socket, localKey }, token, trace: value("SESSIONBUS_DSH_TRACE") === "1" };
 }
 
 function captureContext(ctx) {
@@ -294,7 +294,9 @@ function createRuntime(ctx, config, dependencies, prepared) {
   let ready = false;
   let warned = false;
   const warn = (error) => { if (active() && !warned) { warned = true; dependencies.stderr(`sessionbus: ${clean(error)}\n`); } };
+  const trace = (message) => { if (configured.trace && active()) dependencies.stderr(`sessionbus trace: ${message}\n`); };
   const root = (agent) => ctx.agents.roots().includes(agent);
+  trace(`mode=${values.mode} ready=false socket=${values.socket}`);
   const publicationError = (agent, error, record) => {
     if (record && peers.get(agent) === record) {
       record.peer?.shutdown();
@@ -307,14 +309,19 @@ function createRuntime(ctx, config, dependencies, prepared) {
     }
   };
   const present = (agent) => {
-    if (values.mode !== "peer" || !ready || !root(agent) || peers.has(agent)) return;
+    const isRoot = root(agent);
+    const reason = values.mode !== "peer" ? "not-peer" : !ready ? "not-ready" : !isRoot ? "not-root" : peers.has(agent) ? "published" : "publish";
+    trace(`present id=${agent?.session?.id || agent?.id || "unknown"} root=${isRoot} reason=${reason}`);
+    if (reason !== "publish") return;
     try {
       const current = identity(ctx, agent, values.product, values.groups);
-      if (!current) return;
+      if (!current) { trace(`present id=${agent?.id || "unknown"} root=${isRoot} reason=no-session-id`); return; }
       const record = { peer: undefined, identity: current, rehello: Promise.resolve() };
       const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values), {
         connect: (socket) => {
+          trace(`connect id=${current.session_id} socket=${socket}`);
           const stream = net.createConnection(socket);
+          stream.once("connect", () => trace(`connect id=${current.session_id} state=connected`));
           stream.once("error", (error) => publicationError(agent, error, record));
           return stream;
         },
@@ -327,8 +334,8 @@ function createRuntime(ctx, config, dependencies, prepared) {
   const forget = (agent) => { peers.get(agent)?.peer.shutdown(); peers.delete(agent); };
   let removeCreated = () => {}, removeDisposed = () => {}, removeTitle = () => {};
   if (values.mode === "peer") {
-    removeCreated = ctx.on("agent/created", ({ agent }) => present(agent), { global: true });
-    removeDisposed = ctx.on("agent/disposed", ({ agent }) => forget(agent), { global: true });
+    removeCreated = ctx.on("agent/created", ({ agent }) => { trace(`agent/created id=${agent?.session?.id || agent?.id || "unknown"} scope=global`); present(agent); }, { global: true });
+    removeDisposed = ctx.on("agent/disposed", ({ agent }) => { trace(`agent/disposed id=${agent?.session?.id || agent?.id || "unknown"} scope=global`); forget(agent); }, { global: true });
     removeTitle = ctx.on("session/event", (session, event) => {
       if (event.type !== "session/title") return;
       const agent = ctx.agents.get(session.id);
@@ -372,6 +379,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   });
   const start = () => {
     ready = true;
+    trace(`mode=${values.mode} ready=true`);
     if (values.mode === "lane") {
       const environment = connectionEnvironment(values, launchToken);
       launchToken = undefined;
@@ -394,6 +402,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   };
   const removeReady = ctx.appReady.onReady(start);
   const close = () => {
+    trace(`mode=${values.mode} ready=false reason=close`);
     removeReady(); removeCreated(); removeDisposed(); removeTitle(); removeCommand(); removeGrant(); removeTool();
     for (const agent of peers.keys()) forget(agent);
     worker?.shutdown(); native.removeEvents();

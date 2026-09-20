@@ -51,6 +51,8 @@ if (token === "") {
   assert.deepEqual(state.hellos[0].groups, ["web-proof"]);
   assert.equal(state.hellos[0].session_id, fs.readFileSync(sessionFile, "utf8"));
   assert.equal(logs.some(([header]) => header.id === state.hellos[0].session_id), true);
+  // The fake list is called by this admitted peer, so observer and subject share its group.
+  assert.deepEqual(state.listedIdentity.groups, state.hellos[0].groups);
   assert.deepEqual({ session_id: state.listedIdentity.session_id, product: state.listedIdentity.product, groups: state.listedIdentity.groups }, {
     session_id: state.hellos[0].session_id, product: "dsh", groups: ["web-proof"],
   });

@@ -727,6 +727,34 @@ test("web session creation publishes its root through the global lifecycle", asy
   runtime.close();
 });
 
+test("opt-in trace reports readiness, global lifecycle, and present gates", () => {
+  const ctx = new Context();
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_DSH_TRACE: "1", SESSIONBUS_SOCKET: "/run/sessionbus.sock" };
+  const runtime = createRuntime(ctx, { product: "dsh" }, deps);
+  ctx.ready();
+  const child = agent(ctx, "session-child");
+  ctx.roots.pop();
+  ctx.emitGlobal("agent/created", { agent: child });
+  const root = agent(ctx, "session-root");
+  ctx.emitGlobal("agent/created", { agent: root });
+  ctx.emitGlobal("agent/created", { agent: root });
+  ctx.emitGlobal("agent/disposed", { agent: root });
+  runtime.close();
+  assert.deepEqual(deps.errors, [
+    "sessionbus trace: mode=peer ready=false socket=/run/sessionbus.sock\n",
+    "sessionbus trace: mode=peer ready=true\n",
+    "sessionbus trace: agent/created id=session-child scope=global\n",
+    "sessionbus trace: present id=session-child root=false reason=not-root\n",
+    "sessionbus trace: agent/created id=session-root scope=global\n",
+    "sessionbus trace: present id=session-root root=true reason=publish\n",
+    "sessionbus trace: agent/created id=session-root scope=global\n",
+    "sessionbus trace: present id=session-root root=true reason=published\n",
+    "sessionbus trace: agent/disposed id=session-root scope=global\n",
+    "sessionbus trace: mode=peer ready=false reason=close\n",
+  ]);
+});
+
 test("peer waits for a native session id and replaces it atomically when it changes", async () => {
   const ctx = new Context();
   const one = agent(ctx, "session-one");
