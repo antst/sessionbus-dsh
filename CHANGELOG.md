@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-pre.7 — 2026-09-20
+
+- Run input text is taken from the kit's run seed ({text} or {delivery.body}) and stored as a plain text part; proofs assert the exact durable text on every DSH version (W-087).
+- A turn that fails before the input commit ends the run as failed with DSH's error code and message instead of an unavailable record (W-086).
+- docs/HOST-INSTALL.md: physical graph checks (top-level projection and healed profile fallback), one-boot reconciliation, provider parity with an offline registration check, and the rule that provider plugins must be the release built for the host's DSH floor (dsh-codex 0.3.0 for openai-codex on 0.1.5-rc.2).
+
 ## 0.1.0-pre.6 — 2026-09-20
 
 - Supersedes 0.1.0-pre.5, which was tagged but never published to npm (release runner npm too old for trusted publishing; W-085).
