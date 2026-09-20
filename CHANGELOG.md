@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-pre.8 — 2026-09-20
+
+- The installer merges into an existing lane profile manifest and preserves every other dependency, bundle and field (W-088).
+- docs/HOST-INSTALL.md: check loops stop at the first failure; host assertions are the lockfile, the executing install anchor, the headless boot and the healed fallback closure; the hoisted top-level projection is reported, not asserted.
+
 ## 0.1.0-pre.7 — 2026-09-20
 
 - Run input text is taken from the kit's run seed ({text} or {delivery.body}) and stored as a plain text part; proofs assert the exact durable text on every DSH version (W-087).
