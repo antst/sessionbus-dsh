@@ -155,7 +155,7 @@ carries the calls as ordinary client-to-daemon methods on the same socket
 
 | Artefact | Contents |
 |---|---|
-| `sessionbus` profile `package.json` | `dsh.profile = {"bundles":["@deepseek-ai/dsh-base"],"patchReload":"startup"}`. The product owner confirmed that `dsh-headless` is a one-shot task app and cannot own a resident lane (2026-09-06, `delivery-feb6ed09b1365dbb6c33071baefe8d59`). |
+| `sessionbus` profile `package.json` | `dsh.profile = {"bundles":["@deepseek-ai/dsh-base"],"patchReload":"startup"}`, plus the provider plugin packages required by the host's selected provider. The product owner confirmed that `dsh-headless` is a one-shot task app and cannot own a resident lane (2026-09-06, `delivery-feb6ed09b1365dbb6c33071baefe8d59`). |
 | its `cordis.patch.yml` | fixed coding-agent `system-prompt` persona; disabled `session-title-llm`; the fourth permission preset; and `{id: sessionbus, name: '@sessionbus/dsh', config: {mode: lane, product: sessionbus-dsh}}`, `session-controller`, and `workspace` rows |
 | `dashi-app` `cordis.patch.yml` | insert `{id: sessionbus, name: '@sessionbus/dsh', config: {product: dashi}}` as a sibling of `dashi`/`roller` (`dashi:packages/dashi-app/cordis.patch.yml:103-107`) |
 
@@ -186,6 +186,14 @@ section (2026-09-06, `delivery-feb6ed09b1365dbb6c33071baefe8d59`).
 
 `dashi-app` already inserts `session-controller` (`:85-86`) and `workspace`
 (`:82-83`), so peer mode needs no extra rows.
+
+The base bundle registers only its native `deepseek-official` adapter. A host
+whose global default selects another provider must install the same exact
+provider plugin packages carried by its dashi profile into the resident
+`sessionbus` lane profile; otherwise the lane reaches model execution without
+that adapter and DSH truthfully fails with `NO_ADAPTER`. This is composition
+parity, not plugin state: the profile owns the packages and DSH owns provider
+registration.
 
 ### Product-owned launchers
 

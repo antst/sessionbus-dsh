@@ -267,29 +267,182 @@ Expected final line:
 0.1.5-rc.2
 ```
 
-Define one bounded repair for the host and every profile lock graph. It inspects
-the package records, promotes every stale DSH peer provider to an exact direct
-dependency in one command, installs that frozen graph, and then requires that
-no record has a version other than the target. A graph with no DSH records is
-already coherent. It never deletes `node_modules`, edits or deletes a lockfile,
-or runs a broad dedupe:
+Define one bounded repair for the host and every profile graph. It inspects the
+lock records, promotes every stale DSH peer provider to an exact direct
+dependency in one command, installs that frozen graph, launches the real DSH
+once to heal its shared module fallback, and checks both physical projections.
+A profile graph with no DSH records is coherent. It never deletes
+`node_modules`, edits or deletes a lockfile, prunes a fallback extra, or runs a
+broad dedupe. The embedded closure checker reads only `HOME` and `DSH_HOME`
+from the environment and prints only inventory/result lines:
 
 ```sh
+cat >"$ROLLBACK_ROOT/check-profile-closure.mjs" <<'NODE'
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+} from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+
+const profile = process.argv[2]
+if (profile === undefined) throw new Error('usage: check-profile-closure.mjs PROFILE [INSTALL_DIR]')
+const home = process.env.HOME
+if (home === undefined) throw new Error('HOME is required')
+const dshHome = process.env.DSH_HOME ?? join(home, '.dsh')
+const installDir = process.argv[3] ?? home
+const installAnchor = realpathSync(join(installDir, 'node_modules/@deepseek-ai/dsh/package.json'))
+const modulesDir = join(dshHome, 'profiles/node_modules')
+
+function manifest(anchor) {
+  return JSON.parse(readFileSync(anchor, 'utf8'))
+}
+
+function packageDirFromAnchor(anchor, name) {
+  for (const searchPath of createRequire(anchor).resolve.paths(name) ?? []) {
+    const candidate = join(searchPath, name)
+    if (existsSync(join(candidate, 'package.json'))) return candidate
+  }
+}
+
+const root = manifest(installAnchor)
+const expected = new Map([[root.name, dirname(installAnchor)]])
+const queue = [{ anchor: installAnchor, manifest: root }]
+for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+  const names = [
+    ...Object.keys(next.manifest.dependencies ?? {}),
+    ...Object.keys(next.manifest.peerDependencies ?? {}),
+  ]
+  for (const name of names) {
+    if (expected.has(name)) continue
+    const dir = packageDirFromAnchor(next.anchor, name)
+    if (dir === undefined) continue
+    expected.set(name, dir)
+    const anchor = join(dir, 'package.json')
+    queue.push({ anchor, manifest: manifest(anchor) })
+  }
+}
+
+function installedNames(dir) {
+  const names = []
+  for (const entry of readdirSync(dir).filter(name => !name.startsWith('.'))) {
+    if (!entry.startsWith('@')) names.push(entry)
+    else for (const child of readdirSync(join(dir, entry))) names.push(`${entry}/${child}`)
+  }
+  return names.sort()
+}
+
+const missing = []
+const wrong = []
+for (const [name, target] of expected) {
+  const link = join(modulesDir, name)
+  if (!existsSync(link)) {
+    missing.push(name)
+    continue
+  }
+  const stat = lstatSync(link)
+  const actualTarget = stat.isSymbolicLink() ? readlinkSync(link) : '(not a symlink)'
+  const expectedVersion = manifest(join(target, 'package.json')).version
+  let actualVersion = '(unreadable)'
+  try { actualVersion = manifest(join(link, 'package.json')).version }
+  catch {}
+  if (!stat.isSymbolicLink() || actualTarget !== target || actualVersion !== expectedVersion) {
+    wrong.push(`${name}: expected ${target} (${expectedVersion}); actual ${actualTarget} (${actualVersion})`)
+  }
+}
+
+const extras = []
+for (const name of installedNames(modulesDir)) {
+  if (expected.has(name)) continue
+  const path = join(modulesDir, name)
+  let target = '(not a symlink)'
+  let version = '(unreadable)'
+  try { if (lstatSync(path).isSymbolicLink()) target = readlinkSync(path) } catch {}
+  try { version = manifest(join(path, 'package.json')).version } catch {}
+  extras.push(`${name}: ${target} (${version})`)
+}
+
+console.log(`profile=${profile}`)
+console.log(`install_anchor=${installAnchor}`)
+console.log(`expected=${expected.size}`)
+console.log(`current=${expected.size - missing.length - wrong.length}`)
+console.log(`missing=${missing.length}`)
+for (const line of missing) console.log(`missing_entry=${line}`)
+console.log(`wrong=${wrong.length}`)
+for (const line of wrong) console.log(`wrong_entry=${line}`)
+console.log(`extras=${extras.length}`)
+for (const line of extras) console.log(`extra_entry=${line}`)
+process.exitCode = missing.length === 0 && wrong.length === 0 ? 0 : 1
+NODE
+
+check_dsh_graph() {
+  graph_root=$1
+  target_version=$2
+  physical_required=${3:-false}
+  profile=${4:-headless}
+  node --input-type=module - "$graph_root" "$target_version" "$physical_required" <<'NODE'
+import { join } from 'node:path'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+const [root, target, physicalRequired] = process.argv.slice(2)
+const lock = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
+const records = [...lock.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)].map(([, name, version]) => ({ name, version }))
+const counts = new Map()
+for (const { version } of records) counts.set(version, (counts.get(version) ?? 0) + 1)
+console.log(`DSH packages: ${records.length}`)
+console.log(`DSH versions: ${[...counts.keys()].sort().join(', ')}`)
+for (const [version, count] of [...counts].sort()) console.log(`DSH ${version}: ${count}`)
+const stale = records.filter(record => record.version !== target)
+if (stale.length) {
+  for (const value of [...new Set(stale.map(record => `${record.name}@${record.version}`))].sort()) console.error(value)
+  process.exitCode = 1
+}
+
+const scope = join(root, 'node_modules/@deepseek-ai')
+const physical = []
+if (existsSync(scope)) for (const entry of readdirSync(scope).sort()) {
+  if (entry !== 'dsh' && !entry.startsWith('dsh-')) continue
+  const path = join(scope, entry)
+  try {
+    const version = JSON.parse(readFileSync(join(path, 'package.json'), 'utf8')).version
+    const targetPath = realpathSync.native(path)
+    physical.push({ name: `@deepseek-ai/${entry}`, version, targetPath })
+    console.log(`DSH physical @deepseek-ai/${entry}@${version} -> ${targetPath}`)
+  } catch (error) {
+    console.error(`DSH physical @deepseek-ai/${entry}: ${error.message}`)
+    process.exitCode = 1
+  }
+}
+const physicalVersions = [...new Set(physical.map(record => record.version))].sort()
+console.log(`DSH physical packages: ${physical.length}`)
+console.log(`DSH physical versions: ${physicalVersions.join(', ')}`)
+if (physicalRequired === 'true' && physical.length === 0) {
+  console.error(`DSH physical projection is empty: ${root}`)
+  process.exitCode = 1
+}
+if (physical.some(record => record.version !== target)) {
+  console.error(`DSH physical projection is not uniformly ${target}: ${root}`)
+  process.exitCode = 1
+}
+NODE
+  node "$ROLLBACK_ROOT/check-profile-closure.mjs" "$profile" "$DSH_INSTALL_DIR"
+  printf 'DSH graph coherent: %s\n' "$graph_root"
+}
+
 repair_dsh_graph() {
   graph_root=$1
   target_version=$2
+  physical_required=${3:-false}
+  profile=${4:-headless}
   stale_file=$(mktemp)
   if node --input-type=module - "$graph_root/pnpm-lock.yaml" "$target_version" "$stale_file" <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs'
 const [file, target, staleFile] = process.argv.slice(2)
 const packages = readFileSync(file, 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
 const records = [...packages.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)].map(([, name, version]) => ({ name, version }))
-const counts = new Map()
-for (const { version } of records) counts.set(version, (counts.get(version) ?? 0) + 1)
-const versions = [...counts.keys()].sort()
-console.log(`DSH packages: ${records.length}`)
-console.log(`DSH versions: ${versions.join(', ')}`)
-for (const version of versions) console.log(`DSH ${version}: ${counts.get(version)}`)
 const stale = [...new Set(records.filter(record => record.version !== target).map(record => record.name))].sort()
 writeFileSync(staleFile, stale.length ? `${stale.join('\n')}\n` : '')
 NODE
@@ -302,34 +455,17 @@ NODE
   fi
   mapfile -t stale_packages <"$stale_file"
   rm "$stale_file"
-  if [ "${#stale_packages[@]}" -eq 0 ]; then
-    printf 'DSH graph coherent: %s\n' "$graph_root"
-    return
+  if [ "${#stale_packages[@]}" -gt 0 ]; then
+    pins=()
+    for package in "${stale_packages[@]}"; do pins+=("$package@$target_version"); done
+    pnpm --dir "$graph_root" add --save-exact "${pins[@]}"
+    pnpm --dir "$graph_root" install --frozen-lockfile
   fi
-  pins=()
-  for package in "${stale_packages[@]}"; do pins+=("$package@$target_version"); done
-  pnpm --dir "$graph_root" add --save-exact "${pins[@]}"
-  pnpm --dir "$graph_root" install --frozen-lockfile
-  node --input-type=module - "$graph_root/pnpm-lock.yaml" "$target_version" <<'NODE'
-import { readFileSync } from 'node:fs'
-const [file, target] = process.argv.slice(2)
-const packages = readFileSync(file, 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
-const records = [...packages.matchAll(/^  '?(@deepseek-ai\/dsh[^@']*)@([^':]+)'?:$/gm)].map(([, name, version]) => ({ name, version }))
-const counts = new Map()
-for (const { version } of records) counts.set(version, (counts.get(version) ?? 0) + 1)
-const versions = [...counts.keys()].sort()
-console.log(`DSH packages: ${records.length}`)
-console.log(`DSH versions: ${versions.join(', ')}`)
-for (const version of versions) console.log(`DSH ${version}: ${counts.get(version)}`)
-const stale = records.filter(record => record.version !== target)
-if (stale.length) {
-  for (const value of [...new Set(stale.map(record => `${record.name}@${record.version}`))].sort()) console.error(value)
-  process.exit(1)
+  "$DSH_BIN" --profile headless --help >/dev/null
+  printf '%s\n' 'headless fallback heal exit=0'
+  check_dsh_graph "$graph_root" "$target_version" "$physical_required" "$profile"
 }
-NODE
-  printf 'DSH graph coherent: %s\n' "$graph_root"
-}
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
 if ! sed '/^snapshots:/,$d' "$DSH_INSTALL_DIR/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'host DSH graph has no package records' >&2
   exit 1
@@ -342,9 +478,21 @@ The stopped umka host first reports `233` records: `25` at `0.1.2-rc.1` and
 expected final output is:
 
 ```text
+headless fallback heal exit=0
 DSH packages: 231
 DSH versions: 0.1.5-rc.2
 DSH 0.1.5-rc.2: 231
+DSH physical @deepseek-ai/dsh@0.1.5-rc.2 -> <resolved package directory>
+<one physical line per top-level DSH package>
+DSH physical packages: 26
+DSH physical versions: 0.1.5-rc.2
+profile=headless
+expected=<closure count>
+current=<same closure count>
+missing=0
+wrong=0
+extras=<inventory count>
+extra_entry=<name>: <link target> (<version>)
 DSH graph coherent: /home/antst
 host DSH graph nonzero
 ```
@@ -354,7 +502,36 @@ when their published ranges reject those versions; scoped updates, dedupe, and
 lock pruning do not repair that in-place state. The exact pins are permanent
 manifest dependencies, equivalent to dashi's catalog owning one DSH version.
 Every later host or profile package add calls the same function. Any leftover
-version is listed and stops the run with the rollback copy intact.
+lock or physical version, or any wrong or broken expected fallback link, is
+listed and stops the run with the rollback copy intact. Unexpected fallback
+extras are listed but never deleted.
+
+DSH computes the expected fallback as a first-resolution-wins breadth-first
+walk over dependencies and peers from the executing `dsh` package
+(`packages/boot/app-boot/src/profile.ts:469-504`). The CLI's `INSTALL_ANCHOR`
+is that executing package (`apps/cli/src/profile-boot.ts:78,187-191,226-243`),
+not the top-level `~/node_modules` projection. Every profile launch checks the
+shared fallback; wrong and broken expected links are replaced
+(`profile.ts:201-239,507-528,552-577`). That is why each repair performs one
+real `dsh --profile headless --help` launch and checks the fallback afterwards.
+
+On a hoisted install, pnpm can leave old unpacked packages in the top-level
+projection even after the lock is uniform. DSH does not load through that
+projection after the shared fallback heals, so it is cosmetic for DSH, but it
+is a hazard for other code anchored at the host project. If the physical check
+finds it, stop and validate the cleanup against an isolated copy of that exact
+layout before applying the proven pnpm 10.28.1 reconciliation:
+
+```sh
+npx -y pnpm@10.28.1 --dir "$DSH_INSTALL_DIR" install --frozen-lockfile --force
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
+```
+
+Expected output from the isolated hoisted reproduction was a transition from
+`214` rc.1 physical DSH packages to `231` rc.2 packages, an unchanged lockfile
+hash, and byte-identical unrelated package manifests. On the host, the second
+command must end with one physical version, an exact healed fallback, and
+`DSH graph coherent: /home/antst`.
 
 ## 3. Upgrade dashi to alpha.20 in place
 
@@ -365,7 +542,7 @@ host-level `pnpm add` may re-resolve peers:
 cd "$DSH_INSTALL_DIR"
 pnpm add --save-exact @antst/dashi-launcher@0.1.0-alpha.20
 test -x "$DASHI_BIN"
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
 ```
 
 Expected output reports launcher `0.1.0-alpha.20`, then a nonzero host DSH
@@ -376,7 +553,7 @@ profile immediately after the add:
 
 ```sh
 "$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0-alpha.20
-repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2
+repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 true dashi
 if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'dashi profile DSH graph has no package records' >&2
   exit 1
@@ -401,7 +578,7 @@ launcher and installer find their child `dsh`:
 cd "$DSH_INSTALL_DIR"
 pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.4
 test -x "$HOST_BIN_DIR/sessionbus-dsh"
-repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2
+repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 true headless
 ```
 
 Expected output reports `@sessionbus/dsh 0.1.0-pre.4` and a nonzero host DSH
@@ -411,14 +588,16 @@ Upgrade both installed profiles in place. Re-running the installer repairs the
 old rows by adding their required stable products: `sessionbus-dsh` for the
 lane profile and `dashi` for the dashi peer profile. The sessionbus profile add
 prints `declares no dsh.bundle — installed as a plain dependency`; this is
-expected because that lane profile consumes the host DSH graph.
+expected because that lane profile consumes the host DSH graph. Section 5 adds
+the selected model provider's packages to this lane profile and the plain web
+profile before either one runs a model turn.
 
 ```sh
 "$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2
+repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 false sessionbus
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
 "$DSH_BIN" plugin --profile dashi add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2
+repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 true dashi
 "$DSH_BIN" plugin --profile dashi exec sessionbus-dsh-install --product dashi dashi
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @sessionbus/dsh
@@ -443,7 +622,7 @@ group. Re-check its graph immediately after the package add:
 test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" --profile web --dump-default-config >"$ROLLBACK_ROOT/web-default-config.yml"
 "$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.4
-repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2
+repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2 false web
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
 if grep -Eq '(^|[[:space:]{,])groups:' "$DSH_HOME/profiles/web/cordis.patch.yml"; then
@@ -585,7 +764,242 @@ For the lane acceptance below, use product `dashi` in both `describe` and
 `spawn`; all run, terminal-record, acknowledgment, forget, and process-cleanup
 steps stay unchanged.
 
-## 5. Verification on the real daemon
+## 5. Match the selected provider in model-running profiles
+
+Both the `sessionbus` lane and the plain `web` peer run model turns under the
+host's global default selection. The settings-file provider defaults to
+`$DSH_HOME/settings.yaml` (`packages/settings/settings-file/src/index.ts:50-57`),
+and the selection is stored at `agent-default-model.provider`
+(`packages/core/agent-default-model/src/index.ts:20-37,76-78`). Read and print
+that provider name only; do not print the rest of the settings document:
+
+```sh
+MODEL_PROVIDER=$(node --input-type=module - "$DSH_HOME/settings.yaml" "$DSH_INSTALL_DIR/node_modules/@deepseek-ai/dsh/package.json" <<'NODE'
+import { readFileSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
+const [settingsFile, anchor] = process.argv.slice(2)
+const require = createRequire(realpathSync.native(anchor))
+const { parse } = require('yaml')
+const provider = parse(readFileSync(settingsFile, 'utf8'))?.['agent-default-model']?.provider
+if (typeof provider !== 'string' || provider.length === 0) throw new Error('settings agent-default-model.provider is missing')
+process.stdout.write(provider)
+NODE
+)
+printf 'selected provider=%s\n' "$MODEL_PROVIDER"
+```
+
+Expected output is one non-secret line such as `selected provider=openai-codex`.
+
+The rc.2 base bundle registers `@deepseek-ai/dsh-llm-deepseek` as row
+`llm-deepseek` (`packages/bundle/base/cordis.patch.yml:482-487`); that plugin
+owns provider `deepseek-official`
+(`packages/llm/llm-deepseek/src/index.ts:84-90`). When the selected provider is
+anything else, both model-running profiles need the same provider plugin
+packages and exact versions already carried by dashi. Inventory dashi's direct
+packages first:
+
+```sh
+pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0
+```
+
+Expected output contains `@antst/dashi-app 0.1.0-alpha.20` and the selected
+provider's direct plugin packages with their exact installed versions.
+
+The umka worked example selects `deepseek-official`, so it adds no provider
+package to either profile:
+
+```sh
+PROVIDER_PACKAGE_SPECS=()
+```
+
+Expected output: none.
+
+As a separate example, the dsh host selects `openai-codex`. Its complete exact
+package set is one package:
+
+```sh
+PROVIDER_PACKAGE_SPECS=(dsh-codex@0.3.0)
+```
+
+Expected output: none.
+
+Provider plugins must be releases built for the host's DSH version; check their
+`peerDependencies` floor before installation. rc.2 requires `modelErrors` in a
+resolved provider profile (`packages/llm/llm-pi-ai/src/config.ts:185-217`) and
+reads it at request preparation (`adapter.ts:253-260`); the rc.1-era
+`dsh-codex@0.2.6` omitted that field (`src/adapter.ts:423-439`), so it boots but
+fails its first turn with a `TypeError`.
+
+`dsh-codex@0.3.0` is the smallest release that supplies `modelErrors` and
+declares the rc.2 floor for its DSH host API peers (`package.json:71-96`). Its
+DSH bundle declaration points at
+`cordis.patch.yml` (`package.json:48-51`), whose lines 13-20 insert
+`llm-openai-codex` and `openai-codex-tui`. The built apply registers
+`OPENAI_CODEX_PROVIDER` with the LLM service (`lib/src-*.js`, the
+`ctx.llm.registerAdapter` call). Its exact `dsh-session-format-catalog`
+dependency needs no plugin row, and `dsh-plugin-subscriptions` is not required.
+
+For `deepseek-official`, leave that array empty because the base bundle already
+owns the adapter. Otherwise add every exact spec to both profiles and repair
+each graph immediately afterwards:
+
+```sh
+if [ "$MODEL_PROVIDER" != deepseek-official ]; then
+  test "${#PROVIDER_PACKAGE_SPECS[@]}" -gt 0
+  for profile_name in sessionbus web; do
+    for package_spec in "${PROVIDER_PACKAGE_SPECS[@]}"; do
+      "$DSH_BIN" plugin --profile "$profile_name" add "$package_spec"
+    done
+    repair_dsh_graph "$DSH_HOME/profiles/$profile_name" 0.1.5-rc.2 false "$profile_name"
+  done
+fi
+```
+
+Expected output lists each exact provider package in both profiles, then shows
+each lock and physical graph coherent at rc.2 and the shared fallback exact.
+
+When `MODEL_PROVIDER=deepseek-official`, a daemon-launched lane must be able to
+resolve `DEEPSEEK_API_KEY`. The rc.2 credentials-local precedence is inherited
+process environment, `$DSH_HOME/.credentials.yaml`, invocation-cwd `.env`, then
+`$DSH_HOME/.env`
+(`packages/credentials/credentials-local/src/index.ts:1-17`). Check only for
+presence, in that order, against the daemon environment and the lane cwd; never
+print a value or a credential file:
+
+```sh
+if [ "$MODEL_PROVIDER" = deepseek-official ]; then
+  CREDENTIAL_SOURCE=
+  if tr '\0' '\n' < "/proc/$SESSIONBUS_PID/environ" | grep -q '^DEEPSEEK_API_KEY=.'; then
+    CREDENTIAL_SOURCE='daemon environment'
+  elif [ -f "$DSH_HOME/.credentials.yaml" ] && node --input-type=module - "$DSH_HOME/.credentials.yaml" "$DSH_INSTALL_DIR/node_modules/@deepseek-ai/dsh/package.json" <<'NODE'
+import { readFileSync, realpathSync } from 'node:fs'
+import { createRequire } from 'node:module'
+const [file, anchor] = process.argv.slice(2)
+const require = createRequire(realpathSync.native(anchor))
+const { parse } = require('yaml')
+const value = parse(readFileSync(file, 'utf8'))?.refs?.DEEPSEEK_API_KEY
+process.exit(typeof value === 'string' && value.length > 0 ? 0 : 1)
+NODE
+  then
+    CREDENTIAL_SOURCE='$DSH_HOME/.credentials.yaml'
+  elif [ -f "$LANE_CWD/.env" ] && grep -q '^DEEPSEEK_API_KEY=.' "$LANE_CWD/.env"; then
+    CREDENTIAL_SOURCE='lane cwd .env'
+  elif [ -f "$DSH_HOME/.env" ] && grep -q '^DEEPSEEK_API_KEY=.' "$DSH_HOME/.env"; then
+    CREDENTIAL_SOURCE='$DSH_HOME/.env'
+  fi
+  test -n "$CREDENTIAL_SOURCE"
+  printf 'deepseek credential present via %s\n' "$CREDENTIAL_SOURCE"
+fi
+```
+
+Expected output for `deepseek-official` names exactly one source without its
+value. For another provider, this block produces no output.
+
+rc.2 has no CLI provider-list command, but its LLM service exposes
+`listProviders()` (`packages/llm/llm/src/index.ts:464-470`). Write this bounded
+probe into the rollback directory. It reads only `HOME` and `DSH_HOME` from the
+environment, suppresses DSH boot output, makes no provider request, and prints
+only its one result line:
+
+```sh
+cat >"$ROLLBACK_ROOT/check-profile-provider.mjs" <<'NODE'
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const profile = process.argv[2]
+if (profile === undefined) throw new Error('usage: check-profile-provider.mjs PROFILE [INSTALL_DIR] [PROVIDER] [CWD]')
+const home = process.env.HOME
+if (home === undefined) throw new Error('HOME is required')
+const dshHome = process.env.DSH_HOME ?? join(home, '.dsh')
+const installDir = process.argv[3] ?? home
+const dshManifest = realpathSync(join(installDir, 'node_modules/@deepseek-ai/dsh/package.json'))
+const anchoredRequire = createRequire(dshManifest)
+const { parse } = anchoredRequire('yaml')
+const selectedProvider = parse(readFileSync(join(dshHome, 'settings.yaml'), 'utf8'))?.['agent-default-model']?.provider
+const provider = process.argv[4] ?? selectedProvider
+if (typeof provider !== 'string' || provider.length === 0) throw new Error('settings agent-default-model.provider is missing')
+const cwd = process.argv[5] ?? process.cwd()
+
+const dshLib = join(dirname(dshManifest), 'lib')
+const bootFile = readdirSync(dshLib).find(name => {
+  if (!name.startsWith('profile-boot-') || !name.endsWith('.js')) return false
+  return readFileSync(join(dshLib, name), 'utf8').includes('export { runProfile };')
+})
+if (bootFile === undefined) throw new Error('rc.2 profile-boot entry not found')
+const appBootEntry = anchoredRequire.resolve('@deepseek-ai/dsh-app-boot')
+const [{ runProfile }, { loadLayeredEnv }] = await Promise.all([
+  import(pathToFileURL(join(dshLib, bootFile)).href),
+  import(pathToFileURL(appBootEntry).href),
+])
+
+const patchDir = mkdtempSync(join(dshHome, '.provider-check-'))
+const patchFile = join(patchDir, 'disable-sessionbus.yml')
+writeFileSync(patchFile, '- id: sessionbus\n  disabled: true\n')
+const stdoutWrite = process.stdout.write
+const stderrWrite = process.stderr.write
+process.stdout.write = () => true
+process.stderr.write = () => true
+let shutdown
+let providers
+try {
+  const boot = await runProfile({
+    environment: loadLayeredEnv('dsh', cwd),
+    profile,
+    patchFiles: [patchFile],
+    args: ['--no-open', '--port', '0'],
+  })
+  shutdown = boot.shutdown
+  providers = boot.ctx.llm.listProviders().map(value => value.id).sort()
+} finally {
+  try {
+    if (shutdown !== undefined) await shutdown.shutdown(0)
+  } finally {
+    process.stdout.write = stdoutWrite
+    process.stderr.write = stderrWrite
+    rmSync(patchDir, { recursive: true, force: true })
+  }
+}
+if (!providers?.includes(provider)) throw new Error(`${provider} is not registered in profile ${profile}`)
+console.log(`profile=${profile} provider=${provider} registered`)
+NODE
+```
+
+Expected output: none; the script file is private to this rollback run.
+
+The temporary patch disables only row id `sessionbus` for these two boots. The
+lane row refuses peer mode without a launch token, while a fake token would
+open a daemon connection; neither is part of an offline provider check. Base
+and provider composition remain untouched. Run the same probe for both model-
+running profiles with the launch token and peer groups explicitly absent:
+
+```sh
+for profile_name in sessionbus web; do
+  env -u SESSIONBUS_LAUNCH_TOKEN -u SESSIONBUS_GROUPS DSH_HOME="$DSH_HOME" \
+    node "$ROLLBACK_ROOT/check-profile-provider.mjs" \
+    "$profile_name" "$DSH_INSTALL_DIR" "$MODEL_PROVIDER" "$LANE_CWD"
+done
+```
+
+Expected output, with the provider selected on this host, is:
+
+```text
+profile=sessionbus provider=deepseek-official registered
+profile=web provider=deepseek-official registered
+```
+
+Both commands exit 0. Any missing selected provider or `NO_ADAPTER` failure
+stops the run before the real-daemon turn.
+
+## 6. Verification on the real daemon
 
 ### Lane: package-owned launcher selects `dsh --profile sessionbus`
 
@@ -790,7 +1204,7 @@ dashi 0.1.0-alpha.20 on DSH 0.1.5-rc.2
 dashi help exit=0
 ```
 
-## 6. Rollback
+## 7. Rollback
 
 Rollback is safe after any partial stage. Stop any interactive web or dashi
 process first. Use the rollback directory printed in preflight and source only
