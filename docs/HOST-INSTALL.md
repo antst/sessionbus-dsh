@@ -511,6 +511,49 @@ sessionbus-dsh advertised: true
 Do not edit a shell rc file. The task-shell export is temporary; the systemd
 drop-in is the persistent authority used by daemon-launched products.
 
+### Variant: dashi as the only registered product
+
+This subsection is an alternative, not a step in the live `umka-dev1`
+two-product procedure above. Choose the two-product form when the daemon needs
+the package-owned `sessionbus-dsh` lane command independently of dashi. Choose
+this variant on a dashi host when peers and lanes should share the one registered
+product `dashi`.
+
+Use the same profile package add, but replace the lane installer's default call
+with this explicit product and verify the repaired row:
+
+```sh
+"$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install --product dashi
+grep -F 'config: { mode: lane, product: dashi }' "$DSH_HOME/profiles/sessionbus/cordis.patch.yml"
+```
+
+Expected output includes:
+
+```text
+config: { mode: lane, product: dashi }
+```
+
+When `dashi` is already in `SESSIONBUS_PRODUCTS`, no product addition is
+needed; do not append `sessionbus-dsh`. The daemon maps `dashi` to the installed
+`dashi` bin. Apply the same service PATH drop-in used above, because the daemon
+must resolve both that launcher and the child `dsh` that it starts. After the
+single restart, verify both commands under the effective service PATH:
+
+```sh
+PATH="$SERVICE_PATH" command -v dashi dsh
+```
+
+Expected output on `umka-dev1` is:
+
+```text
+/home/antst/node_modules/.bin/dashi
+/home/antst/node_modules/.bin/dsh
+```
+
+For the lane acceptance below, use product `dashi` in both `describe` and
+`spawn`; all run, terminal-record, acknowledgment, forget, and process-cleanup
+steps stay unchanged.
+
 ## 5. Verification on the real daemon
 
 ### Lane: package-owned launcher selects `dsh --profile sessionbus`

@@ -69,6 +69,7 @@ npm install --prefix "$home" --save-exact --before "$release_cutoff" \
   "@deepseek-ai/dsh@$version" \
   "@deepseek-ai/cordis@4.0.2" \
   "@deepseek-ai/cordis-plugin-loader@1.0.3"
+npm install --prefix "$home" --save-exact "@antst/dashi-launcher@0.1.0-alpha.20"
 dsh="$home/node_modules/.bin/dsh"
 
 for profile in sessionbus web dashi; do
@@ -118,7 +119,7 @@ assert.equal((dashi.match(/id: sessionbus/gu) || []).length, 1);
 assert.match(dashi, /product: dashi/u);
 assert.match(dashi, /dsh-file-uploads-none/u);
 assert.equal(fs.existsSync(`${home}/cordis.patch.yml`), false);
-for (const [name, wanted] of [["@deepseek-ai/dsh", version], ["@deepseek-ai/cordis", "4.0.2"], ["@deepseek-ai/cordis-plugin-loader", "1.0.3"]]) {
+for (const [name, wanted] of [["@deepseek-ai/dsh", version], ["@deepseek-ai/cordis", "4.0.2"], ["@deepseek-ai/cordis-plugin-loader", "1.0.3"], ["@antst/dashi-launcher", "0.1.0-alpha.20"]]) {
   assert.equal(require(`${name}/package.json`).version, wanted);
 }
 const plugin = require(`${home}/profiles/sessionbus/node_modules/@sessionbus/dsh/package.json`).version;
@@ -140,6 +141,22 @@ dsh_pid=$!
 for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/lane.stdout" "$work/lane.stderr" >&2 2>/dev/null || true; exit 1; fi
 assert_permission_proof "$capture" "$work/lane-sessions" "$token"
+stop_processes
+
+DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install" --product dashi
+grep -q 'config: { mode: lane, product: dashi }' "$home/profiles/sessionbus/cordis.patch.yml"
+socket="$work/dashi-lane.sock"
+capture="$work/dashi-lane-proof.json"
+token="w084-dashi-lane-$version"
+echo "DSH $version dashi launcher lane permission proof"
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker &
+server_pid=$!
+for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/dashi-lane-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/node_modules/.bin/dashi" --patch "$proof_patch" >"$work/dashi-lane.stdout" 2>"$work/dashi-lane.stderr" &
+dsh_pid=$!
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/dashi-lane.stdout" "$work/dashi-lane.stderr" >&2 2>/dev/null || true; exit 1; fi
+assert_permission_proof "$capture" "$work/dashi-lane-sessions" "$token"
 stop_processes
 
 socket="$work/dashi.sock"
@@ -216,4 +233,4 @@ for (const profile of ["sessionbus", "web", "dashi"]) {
   assert.doesNotMatch(patch, /id:\s*sessionbus|id:\s*file-uploads-none/u);
 }
 NODE
-echo "DSH $version lane, dashi, and web sessionbus tool calls without approval; packed install and uninstall: PASS"
+echo "DSH $version sessionbus-dsh and dashi launcher lanes, dashi and web peers without approval; packed install and uninstall: PASS"
