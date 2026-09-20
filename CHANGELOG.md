@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-pre.10 — 2026-09-20
+
+- The installer refuses to add a row that one of the profile's bundles already provides (dashi-app 0.1.0-alpha.20 ships the dashi row) and marks the rows it writes; `--remove` deletes only marked rows (W-090).
+- docs/HOST-INSTALL.md: no installer run on the dashi profile from dashi-app 0.1.0-alpha.20 on.
+
 ## 0.1.0-pre.9 — 2026-09-20
 
 - Peer mode publishes only with the native session id, updates titles through the kit's rehello(signal, name, info), and replaces the identity when the durable session id changes; the fake daemon enforces the daemon's identity rules (W-089).
