@@ -62,6 +62,9 @@ when given a launch token. Install the selected launcher alongside `dsh` at the
 host level and put their shared `node_modules/.bin` on the daemon service's
 `PATH`; the `dashi` launcher resolves its child `dsh` by name.
 
+Without an explicit socket, peers use `$XDG_RUNTIME_DIR/sessionbus/presence.sock`
+or `/tmp/sessionbus-<uid>/presence.sock`, matching the daemon's discovery rule.
+
 Uninstall without invoking DSH by running the installed bin from the profile:
 
 ```sh

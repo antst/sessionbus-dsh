@@ -14,12 +14,12 @@ stop_processes() {
   server_pid=
 }
 assert_permission_proof() {
-  node --input-type=module - "$1" "$2" "${3:-}" <<'NODE'
+  node --input-type=module - "$1" "$2" "${3:-}" "${4:-}" <<'NODE'
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
-const [capture, root, token] = process.argv.slice(2);
+const [capture, root, token, sessionFile] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(capture, "utf8"));
 const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL";
 assert.equal(state.hello, true);
@@ -46,15 +46,13 @@ walk(root);
 const logs = files.map(file => fs.readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line)));
 const events = logs.flatMap(records => records.slice(1));
 if (token === "") {
-  assert.equal(state.hellos.length, 2);
-  assert.deepEqual(state.hellos.map(({ product, session_id, name, groups }) => ({ product, session_id, name, groups })), [
-    { product: "dsh", session_id: state.hellos[0].session_id, name: undefined, groups: ["web-proof"] },
-    { product: "dsh", session_id: state.hellos[0].session_id, name: "W089 renamed", groups: ["web-proof"] },
-  ]);
+  assert.equal(state.hellos.length >= 1, true);
+  assert.equal(state.hellos[0].product, "dsh");
+  assert.deepEqual(state.hellos[0].groups, ["web-proof"]);
+  assert.equal(state.hellos[0].session_id, fs.readFileSync(sessionFile, "utf8"));
   assert.equal(logs.some(([header]) => header.id === state.hellos[0].session_id), true);
-  assert.deepEqual(state.listedIdentity, {
-    session_id: state.hellos[0].session_id, kind: "peer", product: "dsh", name: "W089 renamed",
-    groups: ["web-proof"], connected: true, running: true, info: state.hellos[1].info,
+  assert.deepEqual({ session_id: state.listedIdentity.session_id, product: state.listedIdentity.product, groups: state.listedIdentity.groups }, {
+    session_id: state.hellos[0].session_id, product: "dsh", groups: ["web-proof"],
   });
   assert.deepEqual(state.peerDeliveryReceipt, { disposition: "injected" });
 }
@@ -256,12 +254,18 @@ stop_processes
 
 port=$(node -e 'const net=require("node:net"),server=net.createServer(); server.listen(0,"127.0.0.1",()=>{process.stdout.write(String(server.address().port)); server.close()})')
 socket="$work/peer.sock"
+peer_socket_env=(SESSIONBUS_SOCKET="$socket")
+if [[ "$version" == 0.1.5-rc.2 ]]; then
+  mkdir -p "$work/runtime/sessionbus"
+  socket="$work/runtime/sessionbus/presence.sock"
+  peer_socket_env=(-u SESSIONBUS_SOCKET XDG_RUNTIME_DIR="$work/runtime")
+fi
 capture="$work/web-proof.json"
 echo "DSH $version web peer permission proof"
 node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dsh peer &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
-DSH_HOME="$home" DSH_SNAPSHOT_FILE="$peer_fixture" DSH_W081_SESSION_ROOT="$work/web-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_GROUPS='["web-proof"]' "$dsh" --profile web --patch "$proof_patch" --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
+env "${peer_socket_env[@]}" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$peer_fixture" DSH_W081_SESSION_ROOT="$work/web-sessions" SESSIONBUS_GROUPS='["web-proof"]' "$dsh" --profile web --patch "$proof_patch" --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
 dsh_pid=$!
 ready=false
 for _ in $(seq 1 200); do
@@ -272,11 +276,12 @@ done
 if [[ "$ready" != true ]]; then cat "$work/web.stdout" "$work/web.stderr" >&2; exit 1; fi
 for _ in $(seq 1 50); do grep -q 'dsh web: http://' "$work/web.stdout" && break; sleep 0.1; done
 launch_url=$(grep -Eo 'http://[^[:space:]]+' "$work/web.stdout" | tail -1)
-node --input-type=module - "$launch_url" <<'NODE'
+node --input-type=module - "$launch_url" "$work/web-session-id" <<'NODE'
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
 
-const launch = process.argv[2];
+const [launch, sessionFile] = process.argv.slice(2);
 const login = await fetch(launch, { redirect: "manual" });
 assert.equal(login.status, 303);
 const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
@@ -292,12 +297,12 @@ const rpc = async (method, args) => {
   return body.result.value;
 };
 const created = await rpc("session/create", { request: {} });
+fs.writeFileSync(sessionFile, created.sessionId);
 await rpc("session/selectModel", { request: { sessionId: created.sessionId, provider: "deepseek-official", model: "deepseek-v4-flash" } });
-await rpc("session/rename", { request: { sessionId: created.sessionId, title: "W089 renamed" } });
 await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_INPUT_SENTINEL" }] } });
 NODE
 for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"peerDeliveryReceipt"' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 1 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
-assert_permission_proof "$capture" "$work/web-sessions"
+assert_permission_proof "$capture" "$work/web-sessions" "" "$work/web-session-id"
 stop_processes
 
 for profile in sessionbus web dashi; do

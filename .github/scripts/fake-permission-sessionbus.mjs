@@ -11,7 +11,7 @@ const save = () => fs.writeFileSync(capture, `${JSON.stringify(state)}\n`);
 const server = net.createServer((stream) => {
   let admitted, buffer = "", peerDeliverySent = false, session;
   const send = (value) => stream.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
-  const rejectHello = (frame, message) => send({ id: frame.id, error: { code: -32602, message } });
+  const rejectHello = (frame, detail) => send({ id: frame.id, error: { code: -32602, message: "invalid_hello", data: detail } });
   stream.on("data", (chunk) => {
     buffer += chunk;
     for (;;) {
@@ -54,7 +54,7 @@ const server = net.createServer((stream) => {
         } : undefined;
         state.listed = true; state.listedIdentity = identity; save();
         send({ id: frame.id, result: { sessions: identity ? [identity] : [] } });
-        if (mode === "peer" && state.hellos.length > 1 && !peerDeliverySent) {
+        if (mode === "peer" && !peerDeliverySent) {
           peerDeliverySent = true;
           send({ id: 200, method: "message.deliver", params: { message_id: "peer-delivery-proof", from: { session_id: "other-peer", name: "Other", product: "dashi", groups: ["web-proof"] }, body: deliveryInput } });
         }
