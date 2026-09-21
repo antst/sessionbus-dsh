@@ -486,6 +486,64 @@ NODE
   printf '%s\n' 'headless fallback heal exit=0'
   check_dsh_graph "$graph_root" "$target_version" "$physical_mode" "$profile"
 }
+
+profile_lock_has_package() {
+  lock_file=$1
+  package_id=$2
+  node --input-type=module - "$lock_file" "$package_id" <<'NODE'
+import { readFileSync } from 'node:fs'
+const [file, packageId] = process.argv.slice(2)
+const packages = readFileSync(file, 'utf8').split('\nsnapshots:\n', 1)[0] ?? ''
+const escaped = packageId.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+if (!new RegExp(`^  '?${escaped}'?:$`, 'mu').test(packages)) process.exit(1)
+NODE
+}
+
+read_nested_package_identity() {
+  node --input-type=module - "$1" <<'NODE'
+import { readFileSync } from 'node:fs'
+const file = process.argv[2]
+const parts = file.split('/node_modules/').at(-1).split('/')
+const isPackageRoot = parts.length === 2 || (parts.length === 3 && parts[0].startsWith('@'))
+if (!isPackageRoot || parts.at(-1) !== 'package.json') process.exit(0)
+const { name, version } = JSON.parse(readFileSync(file, 'utf8'))
+if (typeof name === 'string' && typeof version === 'string') process.stdout.write(`${name}@${version}`)
+NODE
+}
+
+remove_untracked_nested_packages() {
+  profile_root=$1
+  lock_file="$profile_root/pnpm-lock.yaml"
+  removed=0
+  while IFS= read -r -d '' package_json; do
+    package_dir=${package_json%/package.json}
+    case "$package_json" in
+      "$profile_root"/node_modules/*/node_modules/*/package.json) ;;
+      *) printf 'nested package escaped profile: %s\n' "$package_json" >&2; exit 1 ;;
+    esac
+    package_id=$(read_nested_package_identity "$package_json")
+    test -n "$package_id" || continue
+    if profile_lock_has_package "$lock_file" "$package_id"; then continue; fi
+
+    # Guard 1: the physical package identity has not changed since discovery.
+    test ! -L "$package_dir"
+    test "$package_id" = "$(read_nested_package_identity "$package_json")"
+    # Guard 2: the exact package record is still absent from the frozen lock.
+    if profile_lock_has_package "$lock_file" "$package_id"; then
+      printf 'nested package became lock-tracked: %s\n' "$package_id" >&2
+      exit 1
+    fi
+    printf 'removing untracked nested package: %s (%s)\n' "$package_dir" "$package_id"
+    rm -r -- "$package_dir"
+    removed=$((removed + 1))
+  done < <(find "$profile_root/node_modules" -mindepth 3 -path '*/node_modules/*/node_modules/*' -name package.json -print0)
+
+  install_output=$(pnpm --dir "$profile_root" install --frozen-lockfile 2>&1)
+  printf '%s\n' "$install_output"
+  printf '%s\n' "$install_output" | grep -Fqx 'Lockfile is up to date, resolution step is skipped'
+  printf '%s\n' "$install_output" | grep -Fqx 'Already up to date'
+  printf 'untracked nested packages removed: %s\n' "$removed"
+}
 repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 if ! sed '/^snapshots:/,$d' "$DSH_INSTALL_DIR/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'host DSH graph has no package records' >&2
@@ -564,6 +622,15 @@ is chosen, the second command should report one physical version; the blocking
 checks remain the target lock and executing anchor, successful boot, exact
 healed fallback, and `DSH graph coherent: /home/antst`.
 
+Every profile exact-pin install below also scans nested `node_modules` package
+manifests against that profile's lock. A lock-tracked package is left alone; an
+untracked directory is removed only after its name/version is re-read unchanged
+and the exact record is re-confirmed absent from the lock. The following frozen
+install must print both `Lockfile is up to date, resolution step is skipped` and
+`Already up to date`. This explicit cleanup is necessary because pnpm 10.28.1
+`prune` and `install --frozen-lockfile --force` both left such directories in
+place on a hoisted profile during the measured in-place-upgrade reproduction.
+
 ## 3. Upgrade dashi to 0.1.0 in place
 
 Upgrade the host launcher, then immediately re-check the host graph because a
@@ -584,6 +651,7 @@ profile immediately after the add:
 
 ```sh
 "$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0
+remove_untracked_nested_packages "$DSH_HOME/profiles/dashi"
 repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
 if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'dashi profile DSH graph has no package records' >&2
@@ -635,6 +703,7 @@ pins, until dashi-app publishes a newer pin.
 "$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.13
 repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 optional sessionbus
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
+remove_untracked_nested_packages "$DSH_HOME/profiles/sessionbus"
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @sessionbus/dsh
 grep -F 'config: { mode: lane, product: sessionbus-dsh }' "$DSH_HOME/profiles/sessionbus/cordis.patch.yml"
@@ -661,6 +730,7 @@ test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.13
 repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2 optional web
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
+remove_untracked_nested_packages "$DSH_HOME/profiles/web"
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
 if grep -Eq '(^|[[:space:]{,])groups:' "$DSH_HOME/profiles/web/cordis.patch.yml"; then
   printf '%s\n' 'unexpected configured groups in web profile' >&2
@@ -887,6 +957,7 @@ if [ "$MODEL_PROVIDER" != deepseek-official ]; then
     for package_spec in "${PROVIDER_PACKAGE_SPECS[@]}"; do
       "$DSH_BIN" plugin --profile "$profile_name" add "$package_spec"
     done
+    remove_untracked_nested_packages "$DSH_HOME/profiles/$profile_name"
     repair_dsh_graph "$DSH_HOME/profiles/$profile_name" 0.1.5-rc.2 optional "$profile_name"
   done
 fi
