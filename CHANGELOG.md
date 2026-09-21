@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-pre.14 — 2026-09-21
+
+- Replace the `/sessionbus` list command with a user- and model-invocable DSH skill so `/sessionbus <text>` stays the user's message and receives canonical Sessionbus guidance (W-099).
+
 ## 0.1.0-pre.13 — 2026-09-21
 
 - Depend on @antst/dsh-file-uploads-none ^0.1.0 so stable dashi profiles share one provider copy; the host runbook targets dashi 0.1.0 and this plugin release (W-098).

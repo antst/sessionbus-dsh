@@ -25,6 +25,7 @@ class Context {
     this.exits = [];
     this.calls = [];
     this.registeredTools = new Map();
+    this.registeredSkills = new Map();
     this.titles = new Map();
     this.agents = { roots: () => [...this.roots], get: (id) => this.roots.find((agent) => agent.session?.id === id) };
     this.appReady = { onReady: (call) => { this.ready = call; return () => { this.ready = null; }; } };
@@ -47,6 +48,11 @@ class Context {
       this.registeredTools.set(tool.name, tool);
       if (tool.name === "sessionbus") this.tool = tool;
       return () => { this.registeredTools.delete(tool.name); if (this.tool === tool) this.tool = undefined; };
+    } };
+    this.skills = { register: (skill) => {
+      if (this.registeredSkills.has(skill.name)) throw new Error("duplicate skill");
+      this.registeredSkills.set(skill.name, skill);
+      return () => { this.registeredSkills.delete(skill.name); };
     } };
     this.commands = { register: (command) => { if (this.command) throw new Error("duplicate command"); this.command = command; return () => { if (this.command === command) this.command = undefined; }; } };
     this.byID = new Map();
@@ -689,9 +695,20 @@ test("peer mode tracks roots, re-hellos titles, and binds tools to the executing
   ctx.ready();
   assert.equal(deps.peers.length, 1);
   assert.equal(ctx.tool.name, "sessionbus");
+  const skill = ctx.registeredSkills.get("sessionbus");
+  assert.equal(skill.name, "sessionbus");
+  assert.deepEqual(skill.invocation, { modelInvocable: true, userInvocable: true });
+  assert.equal(skill.source, "runtime");
+  assert.match(skill.content, /`list` returns `self_info`/u);
+  assert.match(skill.content, /There is no `summary` field/u);
+  assert.match(skill.content, /## Delivery dispositions/u);
+  assert.match(skill.content, /## Collect and acknowledge runs/u);
+  assert.match(skill.content, /## Choose independent lane policies/u);
+  assert.match(skill.content, /## Trace direct children/u);
+  assert.match(skill.content, /copy its `from` attribute exactly as the send `target`/u);
+  assert.equal(ctx.command, undefined);
   assert.deepEqual(deps.peers[0].identity, { product: "dashi", session_id: one.id, name: "Original", groups: ["team"], info: { cwd: "/workspace", model: "provider/default" } });
   assert.deepEqual(await ctx.tool.execute({ action: "start", arguments: { session_id: "target", input: "go" } }, { agent: one }), { action: "start", request: { session_id: "target", input: "go" } });
-  assert.deepEqual(await ctx.command.handler({ agent: one, rawInput: "ignored" }), { kind: "success", text: JSON.stringify({ action: "list", request: {} }) });
   ctx.emit("session/event", one.session, { type: "session/title", data: { title: "Renamed" } });
   await Promise.resolve();
   assert.deepEqual(deps.peers[0].rehelloed, { name: "Renamed", info: { cwd: "/workspace", model: "provider/default" } });
@@ -705,6 +722,7 @@ test("peer mode tracks roots, re-hellos titles, and binds tools to the executing
   ctx.emit("agent/created", { agent: created });
   assert.equal(deps.peers.at(-1).identity.session_id, created.id);
   runtime.close();
+  assert.equal(ctx.registeredSkills.has("sessionbus"), false);
 });
 
 test("web session creation publishes its root through the global lifecycle", async () => {
@@ -835,6 +853,7 @@ test("native tool arguments expose the exact closed MCP union", () => {
   createRuntime(ctx, { product: "dashi" }, dependencies(ctx));
   assert.deepEqual(ACTIONS, ["list", "send", "spawn", "describe", "trace", "run", "start", "wait", "status", "interrupt", "close", "forget", "ack"]);
   assert.match(ctx.tool.description, /trace mode off, events or content/u);
+  assert.match(ctx.tool.description, /Read the sessionbus skill/u);
   assert.deepEqual(ctx.tool.parameters, {
     action: { type: "string", enum: ACTIONS, required: true },
     arguments: {
