@@ -12,6 +12,6 @@
 {"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}},"seq":10,"time":0}
 {"type":"turn/start","data":{"turn":2},"seq":11,"time":0}
 {"type":"step/start","data":{"turn":2,"step":1},"seq":12,"time":0}
-{"type":"assistant/attempt","seq":13,"time":0,"data":{"turn":2,"step":1,"stream":[{"type":"chunk","time":0,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"text-chunks","time0":0,"index":0,"dt":[],"texts":["{{fromRequest:(W100_IDLE_DELIVERY_SENTINEL)}}"]},{"type":"chunk","time":0,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"{{fromRequest:(W100_IDLE_DELIVERY_SENTINEL)}}"}}},{"type":"chunk","time":0,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}
+{"type":"assistant/attempt","seq":13,"time":0,"data":{"turn":2,"step":1,"stream":[{"type":"chunk","time":0,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"text-chunks","time0":0,"index":0,"dt":[],"texts":["{{fromRequest:(W102_TRACE_CONTENT_SENTINEL)}}"]},{"type":"chunk","time":0,"chunk":{"type":"block-end","index":0,"block":{"type":"text","text":"{{fromRequest:(W102_TRACE_CONTENT_SENTINEL)}}"}}},{"type":"chunk","time":0,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}
 {"type":"step/end","data":{"turn":2,"step":1},"seq":14,"time":0}
 {"type":"turn/end","data":{"turn":2,"reason":{"kind":"completed"}},"seq":15,"time":0}

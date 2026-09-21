@@ -3,7 +3,13 @@ import net from "node:net";
 
 const [socket, capture, product, mode, boundary] = process.argv.slice(2);
 if (!socket || !capture || !product || !["worker", "peer"].includes(mode)) throw new Error("usage: fake-permission-sessionbus.mjs SOCKET CAPTURE PRODUCT worker|peer");
-const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL", idleInput = "W100_IDLE_DELIVERY_SENTINEL";
+const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL";
+const idleInput = JSON.stringify({
+  kind: "sessionbus.trace", message_id: "traced-message",
+  from: { session_id: "child@host", name: "Child", product: "dashi", groups: ["web-proof"] },
+  matched_children: ["child@host"], body: "W102_TRACE_CONTENT_SENTINEL",
+  deliveries: [{ session_id: "recipient@host", disposition: "injected" }],
+});
 const state = { hello: false, hellos: [], listed: false, ...(mode === "worker" ? { ready: false } : {}) };
 const openRequest = { jsonrpc: "2.0", id: 100, method: "session.open", params: { name: "permission-proof", groups: ["lane-primary", "lane-secondary"], policy: { persistent: false, auto_close_ms: 60000, idle_message: "run", notify: false }, open: { model: "deepseek-official/deepseek-v4-flash" } } };
 const save = () => fs.writeFileSync(capture, `${JSON.stringify(state)}\n`);
@@ -15,7 +21,7 @@ const server = net.createServer((stream) => {
   deliverIdle = () => {
     if (mode !== "peer" || state.idleDeliverySent) return;
     state.idleDeliverySent = true; save();
-    send({ id: 201, method: "message.deliver", params: { message_id: "idle-delivery-proof", from: { session_id: "other-peer", name: "Other", product: "dashi", groups: ["web-proof"] }, body: idleInput } });
+    send({ id: 201, method: "message.deliver", params: { message_id: "trace-copy-proof", from: { session_id: "sessionbus@host", name: "Sessionbus trace@host", product: "sessionbus", groups: ["web-proof"] }, body: idleInput } });
   };
   const rejectHello = (frame, detail) => send({ id: frame.id, error: { code: -32602, message: "invalid_hello", data: detail } });
   stream.on("data", (chunk) => {

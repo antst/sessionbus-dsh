@@ -144,6 +144,7 @@ class NativeSession {
 
   async open(request) {
     const options = request.open || {};
+    if (options.arguments?.length) throw new Error("open.arguments are not supported by DSH");
     let resolved;
     if (request.resume_session_id) {
       resolved = await this.ctx.sessionController.resolveAgent(request.resume_session_id);
@@ -356,6 +357,9 @@ function createRuntime(ctx, config, dependencies, prepared) {
       dependencies.stderr(`sessionbus: ${clean(error)}\n`);
     }
   };
+  const connectionError = (agent, error, record) => {
+    if (active() && peers.get(agent) === record) dependencies.stderr(`sessionbus: ${clean(error)}\n`);
+  };
   const present = (agent) => {
     const isRoot = root(agent);
     const reason = values.mode !== "peer" ? "not-peer" : !ready ? "not-ready" : !isRoot ? "not-root" : peers.has(agent) ? "published" : "publish";
@@ -371,9 +375,10 @@ function createRuntime(ctx, config, dependencies, prepared) {
           trace(`connect id=${current.session_id} socket=${socket}`);
           const stream = net.createConnection(socket);
           stream.once("connect", () => trace(`connect id=${current.session_id} state=connected`));
-          stream.once("error", (error) => publicationError(agent, error, record));
+          stream.once("error", (error) => connectionError(agent, error, record));
           return stream;
         },
+        schedule: dependencies.schedule,
       });
       record.peer = peer;
       peers.set(agent, record);
