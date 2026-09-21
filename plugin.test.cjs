@@ -282,6 +282,16 @@ test("lane hello omits groups and session.open carrying daemon groups succeeds",
   assert.equal(deps.peers.length, 0);
 });
 
+test("lane rejects non-empty open.arguments before changing a native session", async () => {
+  const ctx = new Context();
+  const { deps, runtime } = lane(ctx);
+  await assert.rejects(deps.callbacks.open(null, {
+    name: "worker@host", groups: [], open: { arguments: ["--unsupported"] },
+  }), /open\.arguments are not supported by DSH/u);
+  assert.deepEqual(ctx.calls, []);
+  runtime.close();
+});
+
 test("peer SESSIONBUS_GROUPS is a configuration proof against a fake daemon", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-groups-"));
   const socket = path.join(directory, "bus.sock");
@@ -380,7 +390,7 @@ test("a rejected peer hello is reported and a later title republishes", async ()
   }
 });
 
-test("peer identity and socket connection failures are visible", async () => {
+test("peer identity failures are terminal while socket failures report once and reconnect", async () => {
   const malformed = new Context();
   const badRoot = agent(malformed, "session-incomplete");
   badRoot.session.header.cwd = "";
@@ -392,21 +402,55 @@ test("peer identity and socket connection failures are visible", async () => {
   malformedRuntime.close();
 
   const ctx = new Context();
-  agent(ctx, "session-connect");
+  const root = agent(ctx, "session-connect");
   const deps = dependencies(ctx);
-  deps.ambient = { SESSIONBUS_SOCKET: path.join(os.tmpdir(), `missing-sessionbus-${process.pid}`, "presence.sock") };
-  let failed, stream;
-  deps.connectPeer = (_identity, _deliver, _environment, options) => {
-    stream = options.connect(deps.ambient.SESSIONBUS_SOCKET);
-    failed = new Promise((resolve) => stream.once("error", resolve));
-    return { caller: deps.workerCaller, closed: new Promise(() => {}), error: null, shutdown: () => stream.destroy() };
-  };
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-reconnect-"));
+  const socket = path.join(directory, "presence.sock");
+  const scheduled = [];
+  let failure = deferred();
+  deps.ambient = { SESSIONBUS_SOCKET: socket };
+  deps.connectPeer = connectPeer;
+  deps.schedule = (call) => scheduled.push(call);
+  deps.stderr = (line) => { deps.errors.push(line); failure.resolve(); };
   const runtime = createRuntime(ctx, { product: "dsh" }, deps);
-  ctx.ready();
-  await failed;
-  assert.equal(deps.errors.length, 1);
-  assert.match(deps.errors[0], /^sessionbus: connect ENOENT /u);
-  runtime.close();
+  try {
+    ctx.ready();
+    const peer = runtime.peers.get(root).peer;
+    await failure.promise;
+    while (scheduled.length === 0) await new Promise(setImmediate);
+    failure = deferred();
+    scheduled.shift()();
+    await failure.promise;
+    while (scheduled.length === 0) await new Promise(setImmediate);
+    assert.equal(runtime.peers.get(root).peer, peer);
+    assert.equal(deps.errors.length, 2);
+    assert.equal(deps.errors.every((line) => /^sessionbus: connect ENOENT /u.test(line)), true);
+
+    const admitted = deferred();
+    const server = net.createServer((stream) => {
+      let buffer = "";
+      stream.on("data", (chunk) => {
+        buffer += chunk;
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const frame = JSON.parse(buffer.slice(0, newline));
+        assert.equal(frame.method, "session.hello");
+        stream.write(`${JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: {} })}\n`);
+        admitted.resolve();
+      });
+    });
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+    scheduled.shift()();
+    await admitted.promise;
+    await peer.ready;
+    assert.equal(runtime.peers.get(root).peer, peer);
+    assert.equal(deps.errors.length, 2);
+    runtime.close();
+    await new Promise((resolve) => server.close(resolve));
+  } finally {
+    runtime.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("kit preserves spawn policy.trace through peer and lane callers", { timeout: 10000 }, async () => {
@@ -740,6 +784,37 @@ test("delivery envelope sanitizes identity, metadata, and nested closing tags on
   runtime.close();
 });
 
+test("trace content copies wake an idle root and render in the ordinary sender envelope", async () => {
+  const ctx = new Context();
+  const native = agent(ctx);
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  let steered;
+  native.steer = (message) => {
+    steered = { status: native.status, message };
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+  };
+  const body = JSON.stringify({
+    kind: "sessionbus.trace", message_id: "original-message",
+    from: { session_id: "child@host", name: "Child", product: "dashi", groups: ["team"] },
+    matched_children: ["child@host"], body: "trace body",
+    deliveries: [{ session_id: "target@host", disposition: "injected" }],
+  });
+  const request = delivery(body, {
+    message_id: "trace-copy", from: { session_id: "sessionbus@host", name: "Sessionbus trace@host", product: "sessionbus", groups: ["private"] },
+  });
+
+  assert.deepEqual(await deps.peers[0].deliver(null, request), { disposition: "injected" });
+  assert.equal(steered.status, "idle");
+  assert.deepEqual(steered.message.source, { kind: "plugin", plugin: "sessionbus-dsh", form: "relay" });
+  assert.equal(steered.message.content[0].text,
+    '<cross-session-message from="Sessionbus trace@host" from-session="sessionbus@host">\n'
+    + '[sessionbus-metadata: {"fromProduct":"sessionbus","messageId":"trace-copy","groups":["private"]}]\n'
+    + `${body}\n</cross-session-message>`);
+  runtime.close();
+});
+
 test("one macrotask admission hop drains DSH microtasks before steering", async () => {
   const ctx = new Context();
   const native = agent(ctx);
@@ -1039,7 +1114,7 @@ test("native tool arguments expose the exact closed MCP union", () => {
   ctx.dispose();
 });
 
-test("native permission hook overrides a later ask-all policy only for sessionbus", async () => {
+test("native permission hook grants only sessionbus and delegates every other tool to native policy", async () => {
   const ctx = new Context();
   createRuntime(ctx, { product: "dashi" }, dependencies(ctx));
   const removeDummy = ctx.tools.register({ name: "w081_dummy" });

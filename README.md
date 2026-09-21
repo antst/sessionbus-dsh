@@ -6,8 +6,9 @@ It supports DeepSeek Harness `0.1.5-rc.2` and later; tested versions are
 `0.1.5-rc.2`, `0.1.6-alpha.1`, and `0.1.6-alpha.2`.
 A DSH profile must install every DSH package at one uniform DSH version; adding
 one prerelease package can otherwise pull newer prereleases through DSH's caret peers.
-The default single-tool permission grant relies on DSH's `tools/pre-execute`
-waterfall, present since the `0.1.5-rc.2` peer floor.
+The default grant applies only to the `sessionbus` tool through DSH's
+`tools/pre-execute` waterfall; every other tool continues through native DSH
+permission policy. The waterfall is present since the `0.1.5-rc.2` peer floor.
 `@sessionbus/dsh` is a pkg.pr.new preview until a separately reviewed trusted-
 publishing workflow exists; its first registry version must be published manually
 before trusted publishing can be configured.
@@ -64,9 +65,14 @@ host level and put their shared `node_modules/.bin` on the daemon service's
 
 Without an explicit socket, peers use `$XDG_RUNTIME_DIR/sessionbus/presence.sock`
 or `/tmp/sessionbus-<uid>/presence.sock`, matching the daemon's discovery rule.
+Peer publication retries through the kit's reconnect path when the daemon is
+unavailable, and each failed connection attempt writes one diagnostic line.
 Set `SESSIONBUS_DSH_TRACE=1` to write one-line mode, readiness, root-lifecycle,
 publication-gate, and socket-connection diagnostics to stderr; tracing is off
 by default.
+
+The lane advertises no native extra arguments. A non-empty `open.arguments`
+request is rejected rather than silently ignored.
 
 Uninstall without invoking DSH by running the installed bin from the profile:
 

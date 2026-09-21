@@ -22,7 +22,7 @@ import path from "node:path";
 
 const [capture, root, token, sessionFile] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(capture, "utf8"));
-const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL", idleInput = "W100_IDLE_DELIVERY_SENTINEL";
+const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL", traceContent = "W102_TRACE_CONTENT_SENTINEL";
 assert.equal(state.hello, true);
 assert.equal(state.listed, true);
 if (Object.hasOwn(state, "ready")) assert.equal(state.ready, true);
@@ -70,8 +70,12 @@ assert.equal(events.some(event => event.type === "user/message" && event.data?.c
 assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === deliveryInput)), true);
 if (token === "") {
   assert.equal(events.filter(event => event.type === "turn/start").length, 2);
-  assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.text?.includes(`\n${idleInput}\n`)), true);
-  assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === idleInput)), true);
+  const traceMessage = events.find(event => event.type === "user/message" && event.data?.content?.[0]?.text?.includes('"kind":"sessionbus.trace"'));
+  assert.ok(traceMessage);
+  assert.equal(traceMessage.data.content[0].text.startsWith('<cross-session-message from="Sessionbus trace@host" from-session="sessionbus@host">\n'), true);
+  assert.equal(traceMessage.data.content[0].text.includes('[sessionbus-metadata: {"fromProduct":"sessionbus","messageId":"trace-copy-proof","groups":["web-proof"]}]'), true);
+  assert.equal(traceMessage.data.content[0].text.includes(`"body":"${traceContent}"`), true);
+  assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === traceContent)), true);
 }
 if (token !== "") assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === input)), true);
 const sessionbusCall = events.find(event => event.type === "tool/call" && event.data?.name === "sessionbus");
@@ -224,6 +228,19 @@ fixture="$root/.github/fixtures/sessionbus-tool-call.jsonl"
 peer_fixture="$root/.github/fixtures/sessionbus-peer-rehello.jsonl"
 proof_patch="$root/.github/fixtures/sessionbus-tool-call.patch.yml"
 
+socket="$work/open-arguments.sock"
+capture="$work/open-arguments-proof.json"
+token="w102-open-arguments-$version"
+echo "DSH $version unsupported open.arguments proof"
+node "$root/.github/scripts/fake-open-arguments-sessionbus.mjs" "$socket" "$capture" &
+server_pid=$!
+for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" >"$work/open-arguments.stdout" 2>"$work/open-arguments.stderr" &
+dsh_pid=$!
+for _ in $(seq 1 100); do [[ -s "$capture" ]] && grep -q '"ready":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ ! -s "$capture" ]] || ! grep -q '"ready":true' "$capture"; then cat "$capture" "$work/open-arguments.stdout" "$work/open-arguments.stderr" >&2 2>/dev/null || true; exit 1; fi
+stop_processes
+
 socket="$work/lane.sock"
 capture="$work/lane-proof.json"
 token="w075-fake-$version"
@@ -291,10 +308,7 @@ if [[ "$version" == 0.1.5-rc.2 ]]; then
   peer_socket_env=(-u SESSIONBUS_SOCKET XDG_RUNTIME_DIR="$work/runtime")
 fi
 capture="$work/web-proof.json"
-echo "DSH $version web peer permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dsh peer &
-server_pid=$!
-for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+echo "DSH $version web peer reconnect, permission and trace proof"
 env "${peer_socket_env[@]}" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$peer_fixture" DSH_W081_SESSION_ROOT="$work/web-sessions" SESSIONBUS_GROUPS='["web-proof"]' "$dsh" --profile web --patch "$proof_patch" --no-open --host 127.0.0.1 --port "$port" >"$work/web.stdout" 2>"$work/web.stderr" &
 dsh_pid=$!
 ready=false
@@ -329,7 +343,35 @@ const rpc = async (method, args) => {
 const created = await rpc("session/create", { request: {} });
 fs.writeFileSync(sessionFile, created.sessionId);
 await rpc("session/selectModel", { request: { sessionId: created.sessionId, provider: "deepseek-official", model: "deepseek-v4-flash" } });
-await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_INPUT_SENTINEL" }] } });
+NODE
+for _ in $(seq 1 100); do grep -q '^sessionbus: connect ' "$work/web.stderr" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+[[ $(grep -c '^sessionbus: connect ' "$work/web.stderr") -eq 1 ]]
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dsh peer &
+server_pid=$!
+for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
+for _ in $(seq 1 100); do [[ -s "$capture" ]] && grep -q '"hello":true' "$capture" && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+[[ -s "$capture" ]] && grep -q '"hello":true' "$capture"
+[[ $(grep -c '^sessionbus: connect ' "$work/web.stderr") -eq 1 ]]
+node --input-type=module - "$launch_url" "$work/web-session-id" <<'NODE'
+import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+
+const [launch, sessionFile] = process.argv.slice(2);
+const login = await fetch(launch, { redirect: "manual" });
+assert.equal(login.status, 303);
+const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
+assert.ok(cookie);
+const origin = new URL(launch).origin;
+const response = await fetch(`${origin}/api/session/prompt`, {
+  method: "POST", headers: { "content-type": "application/json", cookie },
+  body: JSON.stringify({ type: "client-request", rpcId: crypto.randomUUID(), method: "session/prompt", payload: { args: { request: {
+    requestId: crypto.randomUUID(), sessionId: fs.readFileSync(sessionFile, "utf8"), mode: "queue",
+    content: [{ type: "text", text: "W087_INPUT_SENTINEL" }],
+  } } } }),
+});
+const body = await response.json();
+assert.equal(body.result?.ok, true, JSON.stringify(body));
 NODE
 for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"peerDeliveryReceipt"' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 1 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 grep -q '"peerDeliveryReceipt"' "$capture"
