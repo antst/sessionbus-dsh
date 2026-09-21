@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-pre.13 — 2026-09-21
+
+- Depend on @antst/dsh-file-uploads-none ^0.1.0 so stable dashi profiles share one provider copy; the host runbook targets dashi 0.1.0 and this plugin release (W-098).
+
 ## 0.1.0-pre.12 — 2026-09-20
 
 - Opt-in diagnostics: SESSIONBUS_DSH_TRACE=1 prints the plugin's mode, readiness, root lifecycle, publication gate and socket connection on stderr; the host runbook's web-peer check uses a same-group observer and drives the idle peer with one prompt (W-095).

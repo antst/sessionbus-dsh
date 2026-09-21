@@ -5,8 +5,8 @@ example. Run it as the ordinary account returned by `id -un`, never with
 `sudo`, and refer to its home as `$HOME` in commands. On `umka-dev1` that
 account is `antst` and its home is `/home/antst`; earlier references to `pdev`
 were wrong. The target set is DSH `0.1.5-rc.2`, `@antst/dashi-launcher`
-`0.1.0-alpha.21`, `@antst/dashi-app` `0.1.0-alpha.21`, and
-`@sessionbus/dsh` `0.1.0-pre.12`. Sessionbus-dsh pre.4 through pre.11 are
+`0.1.0`, `@antst/dashi-app` `0.1.0`, and
+`@sessionbus/dsh` `0.1.0-pre.13`. Earlier Sessionbus-dsh prereleases are
 superseded; pre.3 and pre.5 were never published. Do not continue past a
 failed assertion.
 
@@ -19,23 +19,23 @@ environment assignments intentionally displayed are the daemon's filtered
 `PATH=` and `SESSIONBUS_PRODUCTS=` lines.
 
 Dashi alpha.18 lacked the `sessionbus` profile row and the launcher token
-path. Alpha.19 was partially published and must not be installed. Dashi
-alpha.21 is the release in progress carrying the built tarballs and the plugin
-re-pin; dashi-app alpha.20 tarballs were empty and must not be installed. Run
+path. Alpha.19 was partially published and must not be installed. Dashi 0.1.0
+carries the built tarballs and the plugin re-pin; dashi-app alpha.20 tarballs
+were empty and must not be installed. Run
 these exact probes immediately before starting:
 
 ```sh
-npm view @antst/dashi-launcher@0.1.0-alpha.21 version && npm view @antst/dashi-app@0.1.0-alpha.21 version && npm view @antst/dsh-file-uploads-none@0.1.0-alpha.18 version
-npm view @sessionbus/dsh@0.1.0-pre.12 version && npm view @sessionbus/kit@0.5.5 version
+npm view @antst/dashi-launcher@0.1.0 version && npm view @antst/dashi-app@0.1.0 version && npm view @antst/dsh-file-uploads-none@0.1.0 version
+npm view @sessionbus/dsh@0.1.0-pre.13 version && npm view @sessionbus/kit@0.5.5 version
 ```
 
 Expected output, in order:
 
 ```text
-0.1.0-alpha.21
-0.1.0-alpha.21
-0.1.0-alpha.18
-0.1.0-pre.12
+0.1.0
+0.1.0
+0.1.0
+0.1.0-pre.13
 0.5.5
 ```
 
@@ -564,26 +564,26 @@ is chosen, the second command should report one physical version; the blocking
 checks remain the target lock and executing anchor, successful boot, exact
 healed fallback, and `DSH graph coherent: /home/antst`.
 
-## 3. Upgrade dashi to alpha.21 in place
+## 3. Upgrade dashi to 0.1.0 in place
 
 Upgrade the host launcher, then immediately re-check the host graph because a
 host-level `pnpm add` may re-resolve peers:
 
 ```sh
 cd "$DSH_INSTALL_DIR"
-pnpm add --save-exact @antst/dashi-launcher@0.1.0-alpha.21
+pnpm add --save-exact @antst/dashi-launcher@0.1.0
 test -x "$DASHI_BIN"
 repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 ```
 
-Expected output reports launcher `0.1.0-alpha.21`, then a nonzero host DSH
+Expected output reports launcher `0.1.0`, then a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
 Upgrade the existing dashi profile rather than replacing it, and re-check that
 profile immediately after the add:
 
 ```sh
-"$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0-alpha.21
+"$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0
 repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
 if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
   printf '%s\n' 'dashi profile DSH graph has no package records' >&2
@@ -594,7 +594,7 @@ pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @antst/dashi-app @sessionbu
 ```
 
 Expected output contains `dashi profile DSH graph nonzero`,
-`@antst/dashi-app 0.1.0-alpha.21`, and a DSH package count at the single version
+`@antst/dashi-app 0.1.0`, and a DSH package count at the single version
 `0.1.5-rc.2`. The count `11` was observed in a clean rebuilt profile, but it is
 inventory only and is never an acceptance criterion. The pre-existing
 `@sessionbus/dsh` row remains at its old version until the next section.
@@ -607,12 +607,12 @@ launcher and installer find their child `dsh`:
 
 ```sh
 cd "$DSH_INSTALL_DIR"
-pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.12
+pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.13
 test -x "$HOST_BIN_DIR/sessionbus-dsh"
 repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 ```
 
-Expected output reports `@sessionbus/dsh 0.1.0-pre.12` and a nonzero host DSH
+Expected output reports `@sessionbus/dsh 0.1.0-pre.13` and a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
 Upgrade the installed sessionbus profile in place. Re-running the installer
@@ -626,13 +626,13 @@ Starting with `@sessionbus/dsh@0.1.0-pre.8`, re-running the installer merges its
 dependency, row, and base-bundle entry into the existing profile manifest; it
 does not remove provider packages, other bundles, or other manifest fields.
 
-`@antst/dashi-app@0.1.0-alpha.21` and later already ship the `sessionbus` row
+`@antst/dashi-app@0.1.0` and later already ship the `sessionbus` row
 and their exact `@sessionbus/dsh` dependency. Do not run the installer against
 the dashi profile: the dashi product runs the plugin version that dashi-app
 pins, until dashi-app publishes a newer pin.
 
 ```sh
-"$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.12
+"$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.13
 repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 optional sessionbus
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
@@ -641,7 +641,7 @@ grep -F 'config: { mode: lane, product: sessionbus-dsh }' "$DSH_HOME/profiles/se
 grep -F 'config: { product: dashi }' "$DSH_HOME/profiles/dashi/node_modules/@antst/dashi-app/cordis.patch.yml"
 ```
 
-Expected output contains `@sessionbus/dsh 0.1.0-pre.12` for the sessionbus
+Expected output contains `@sessionbus/dsh 0.1.0-pre.13` for the sessionbus
 profile and the exact version pinned by dashi-app for the dashi profile, no DSH
 version other than rc.2 in the lane graph (which may have zero DSH records),
 and these exact rows:
@@ -658,7 +658,7 @@ group. Re-check its graph immediately after the package add:
 ```sh
 test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" --profile web --dump-default-config >"$ROLLBACK_ROOT/web-default-config.yml"
-"$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.12
+"$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.13
 repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2 optional web
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
@@ -839,7 +839,7 @@ packages first:
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0
 ```
 
-Expected output contains `@antst/dashi-app 0.1.0-alpha.21` and the selected
+Expected output contains `@antst/dashi-app 0.1.0` and the selected
 provider's direct plugin packages with their exact installed versions.
 
 The umka worked example selects `deepseek-official`, so it adds no provider
@@ -1248,7 +1248,7 @@ rm "$HELP_FILE"
 Expected output:
 
 ```text
-dashi 0.1.0-alpha.21 on DSH 0.1.5-rc.2
+dashi 0.1.0 on DSH 0.1.5-rc.2
 dashi help exit=0
 ```
 
@@ -1276,7 +1276,7 @@ for profile_name in web sessionbus; do
   installer="$DSH_HOME/profiles/$profile_name/node_modules/.bin/sessionbus-dsh-install"
   package="$DSH_HOME/profiles/$profile_name/node_modules/@sessionbus/dsh/package.json"
   installed_version=$(if [ -f "$package" ]; then node -p 'require(process.argv[1]).version' "$package" 2>/dev/null || true; fi)
-  if [ "$installed_version" = '0.1.0-pre.12' ] && [ -x "$installer" ]; then
+  if [ "$installed_version" = '0.1.0-pre.13' ] && [ -x "$installer" ]; then
     pnpm --dir "$DSH_HOME/profiles/$profile_name" exec sessionbus-dsh-install --remove "$profile_name"
   fi
 done
