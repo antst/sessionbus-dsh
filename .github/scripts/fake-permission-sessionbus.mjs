@@ -1,16 +1,22 @@
 import fs from "node:fs";
 import net from "node:net";
 
-const [socket, capture, product, mode] = process.argv.slice(2);
+const [socket, capture, product, mode, boundary] = process.argv.slice(2);
 if (!socket || !capture || !product || !["worker", "peer"].includes(mode)) throw new Error("usage: fake-permission-sessionbus.mjs SOCKET CAPTURE PRODUCT worker|peer");
-const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL";
+const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL", idleInput = "W100_IDLE_DELIVERY_SENTINEL";
 const state = { hello: false, hellos: [], listed: false, ...(mode === "worker" ? { ready: false } : {}) };
-const openRequest = { jsonrpc: "2.0", id: 100, method: "session.open", params: { name: "permission-proof", groups: ["lane-primary", "lane-secondary"], open: { model: "deepseek-official/deepseek-v4-flash" } } };
+const openRequest = { jsonrpc: "2.0", id: 100, method: "session.open", params: { name: "permission-proof", groups: ["lane-primary", "lane-secondary"], policy: { persistent: false, auto_close_ms: 60000, idle_message: "run", notify: false }, open: { model: "deepseek-official/deepseek-v4-flash" } } };
 const save = () => fs.writeFileSync(capture, `${JSON.stringify(state)}\n`);
+let deliverIdle = () => {};
 
 const server = net.createServer((stream) => {
   let admitted, buffer = "", peerDeliverySent = false, session;
   const send = (value) => stream.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
+  deliverIdle = () => {
+    if (mode !== "peer" || state.idleDeliverySent) return;
+    state.idleDeliverySent = true; save();
+    send({ id: 201, method: "message.deliver", params: { message_id: "idle-delivery-proof", from: { session_id: "other-peer", name: "Other", product: "dashi", groups: ["web-proof"] }, body: idleInput } });
+  };
   const rejectHello = (frame, detail) => send({ id: frame.id, error: { code: -32602, message: "invalid_hello", data: detail } });
   stream.on("data", (chunk) => {
     buffer += chunk;
@@ -22,6 +28,7 @@ const server = net.createServer((stream) => {
       if (frame.method === "session.hello") {
         const next = frame.params;
         if (next?.product !== product) return rejectHello(frame, `launched product ${product}, got ${next?.product}`);
+        if (mode === "worker" && next.supports_message_run !== true) return rejectHello(frame, "message-triggered runs unsupported");
         if (mode === "peer") {
           if (typeof next.session_id !== "string" || next.session_id === "" || !Array.isArray(next.groups)
             || next.groups.some((group) => typeof group !== "string" || group === "") || new Set(next.groups).size !== next.groups.length
@@ -44,7 +51,16 @@ const server = net.createServer((stream) => {
         state.deliveryReceipt = frame.result; save();
       } else if (frame.id === 104) {
         state.deliveryRun = frame.result;
-        state.ready = state.run?.state === "done" && state.run?.result?.outcome === "completed" && frame.result?.state === "done" && frame.result?.result?.outcome === "completed";
+        if (boundary === "boundary") {
+          send({ id: 105, method: "message.deliver", params: { message_id: "boundary-proof", from: { session_id: "source", product: "dsh", groups: [] }, body: "boundary" } });
+        } else {
+          state.ready = state.run?.state === "done" && state.run?.result?.outcome === "completed" && frame.result?.state === "done" && frame.result?.result?.outcome === "completed";
+          save();
+        }
+      } else if (frame.id === 105) {
+        state.boundaryDelivery = frame;
+        state.ready = state.run?.state === "done" && state.run?.result?.outcome === "completed"
+          && state.deliveryRun?.state === "done" && state.deliveryRun?.result?.outcome === "completed" && frame.error?.code === -32004;
         save();
       } else if (frame.method === "session.list") {
         const identity = mode === "peer" ? {
@@ -60,6 +76,8 @@ const server = net.createServer((stream) => {
         }
       } else if (frame.id === 200) {
         state.peerDeliveryReceipt = frame.result; save();
+      } else if (frame.id === 201) {
+        state.idleDeliveryReceipt = frame.result; save();
       } else if (frame.method === "turn.ready") {
         state.turnReady = frame.params; save(); send({ id: frame.id, result: {} });
         const statusID = frame.params.run_id === "proof/1" ? 102 : 104;
@@ -70,4 +88,5 @@ const server = net.createServer((stream) => {
 });
 
 server.listen(socket);
+process.on("SIGUSR1", () => deliverIdle());
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
