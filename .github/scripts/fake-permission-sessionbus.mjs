@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import net from "node:net";
 
-const [socket, capture, product, mode, boundary] = process.argv.slice(2);
+const [socket, capture, product, mode] = process.argv.slice(2);
 if (!socket || !capture || !product || !["worker", "peer"].includes(mode)) throw new Error("usage: fake-permission-sessionbus.mjs SOCKET CAPTURE PRODUCT worker|peer");
 const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL";
 const idleInput = JSON.stringify({
@@ -57,12 +57,7 @@ const server = net.createServer((stream) => {
         state.deliveryReceipt = frame.result; save();
       } else if (frame.id === 104) {
         state.deliveryRun = frame.result;
-        if (boundary === "boundary") {
-          send({ id: 105, method: "message.deliver", params: { message_id: "boundary-proof", from: { session_id: "source", product: "dsh", groups: [] }, body: "boundary" } });
-        } else {
-          state.ready = state.run?.state === "done" && state.run?.result?.outcome === "completed" && frame.result?.state === "done" && frame.result?.result?.outcome === "completed";
-          save();
-        }
+        send({ id: 105, method: "message.deliver", params: { message_id: "boundary-proof", from: { session_id: "source", product: "dsh", groups: [] }, body: "boundary" } });
       } else if (frame.id === 105) {
         state.boundaryDelivery = frame;
         state.ready = state.run?.state === "done" && state.run?.result?.outcome === "completed"

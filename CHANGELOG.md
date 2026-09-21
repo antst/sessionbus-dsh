@@ -8,6 +8,7 @@
 - Reject unsupported non-empty lane `open.arguments` instead of ignoring them (W-102).
 - Grant only the `sessionbus` tool by default; every other tool stays under native DSH permission policy (W-102).
 - Prove daemon-generated `trace: content` copies wake idle dashi parents and retain the ordinary sender envelope (W-102).
+- Pin the successor Sessionbus kit and make the lane `not_running` boundary proof unconditional in every packed DSH leg (W-103).
 
 ## 0.1.0-pre.13 — 2026-09-21
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 version=${1:?pass the DSH version}
-candidate_kit=${2:-}
+[[ $# -eq 1 ]] || { echo "usage: prove-packed-install.sh DSH_VERSION" >&2; exit 2; }
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/sessionbus-dsh-proof.XXXXXX")
 server_pid=
@@ -35,7 +35,7 @@ if (token !== "") {
   assert.equal(state.run.result.result, input);
   assert.deepEqual(state.deliveryReceipt, { disposition: "injected" });
   assert.equal(state.deliveryRun.result.result, deliveryInput);
-  if (state.boundaryDelivery !== undefined) assert.equal(state.boundaryDelivery.error?.code, -32004);
+  assert.equal(state.boundaryDelivery.error?.code, -32004);
 }
 const files = [];
 const walk = directory => {
@@ -146,19 +146,6 @@ DSH_HOME="$home" "$dsh" plugin --profile dashi add "$root/.github/fixtures/bundl
 for profile in sessionbus web dashi; do
   DSH_HOME="$home" "$dsh" plugin --profile "$profile" add "$tarball"
 done
-if [[ -n "$candidate_kit" ]]; then
-  candidate_kit=$(realpath "$candidate_kit")
-  for profile in sessionbus web dashi; do
-    node --input-type=module - "$home/profiles/$profile/package.json" "$candidate_kit" <<'NODE'
-import fs from "node:fs";
-const [manifest, kit] = process.argv.slice(2);
-const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
-pkg.pnpm = { ...pkg.pnpm, overrides: { ...pkg.pnpm?.overrides, "@sessionbus/kit": `file:${kit}` } };
-fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
-NODE
-    pnpm --dir "$home/profiles/$profile" install
-  done
-fi
 cp "$home/profiles/sessionbus/package.json" "$work/lane-manifest-before-install.json"
 DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install"
 cmp -s "$work/lane-manifest-before-install.json" "$home/profiles/sessionbus/package.json"
@@ -245,7 +232,7 @@ socket="$work/lane.sock"
 capture="$work/lane-proof.json"
 token="w075-fake-$version"
 echo "DSH $version sessionbus lane permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh worker ${candidate_kit:+boundary} &
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh worker &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
 PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/lane-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" --patch "$proof_patch" >"$work/lane.stdout" 2>"$work/lane.stderr" &
@@ -275,7 +262,7 @@ socket="$work/dashi-lane.sock"
 capture="$work/dashi-lane-proof.json"
 token="w084-dashi-lane-$version"
 echo "DSH $version dashi launcher lane permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker ${candidate_kit:+boundary} &
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
 PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/dashi-lane-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/node_modules/.bin/dashi" --patch "$proof_patch" >"$work/dashi-lane.stdout" 2>"$work/dashi-lane.stderr" &
@@ -289,7 +276,7 @@ socket="$work/dashi.sock"
 capture="$work/dashi-proof.json"
 token="w077-dashi-$version"
 echo "DSH $version dashi row permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker ${candidate_kit:+boundary} &
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
 DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/dashi-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$dsh" --profile dashi --patch "$proof_patch" >"$work/dashi.stdout" 2>"$work/dashi.stderr" &

@@ -741,6 +741,72 @@ test("lane delivery after turn end returns NotRunning without a second native tu
   assert.deepEqual(await running, { outcome: "completed", native_stop_reason: "completed", result: "" });
 });
 
+test("lane ended-run NotRunning reaches the kit reply as an RPC error", { timeout: 10000 }, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sessionbus-dsh-boundary-reply-"));
+  const socket = path.join(directory, "bus.sock");
+  const boundary = deferred(), ready = deferred(), idle = deferred();
+  const streams = new Set();
+  const ctx = new Context();
+  const native = agent(ctx);
+  native.status = "running";
+  native.whenIdle = () => idle.promise;
+  native.followup = (message) => {
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+    ctx.emit("session/event", native.session, { type: "turn/start", data: { turn: 10 } });
+    ctx.emit("session/event", native.session, { type: "user/message", data: message });
+  };
+  const server = net.createServer((stream) => {
+    streams.add(stream);
+    stream.on("close", () => streams.delete(stream));
+    let buffer = "";
+    const send = (value) => stream.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
+    stream.on("data", (chunk) => {
+      buffer += chunk;
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) return;
+        const frame = JSON.parse(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        if (frame.method === "session.hello") {
+          send({ id: frame.id, result: {} });
+          send({ id: 100, method: "session.open", params: {
+            name: "boundary", groups: [],
+            policy: { persistent: false, auto_close_ms: 60000, idle_message: "run", notify: false }, open: {},
+          } });
+        } else if (frame.id === 100 && frame.result?.session_id) {
+          send({ id: 101, method: "turn.execute", params: { session_id: frame.result.session_id, run_id: "boundary/1", input: "hold" } });
+        } else if (frame.id === 101 && frame.result?.run_id === "boundary/1") {
+          ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 10, reason: { kind: "completed" } } });
+          send({ id: 102, method: "message.deliver", params: delivery("boundary") });
+        } else if (frame.id === 102) {
+          boundary.resolve(frame);
+          idle.resolve();
+        } else if (frame.method === "turn.ready") {
+          send({ id: frame.id, result: {} });
+          ready.resolve();
+        }
+      }
+    });
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+  const deps = dependencies(ctx);
+  deps.ambient = { SESSIONBUS_LAUNCH_TOKEN: "boundary-token", SESSIONBUS_SOCKET: socket };
+  deps.serveWorker = serveWorker;
+  const runtime = createRuntime(ctx, { product: "sessionbus-dsh" }, deps);
+  try {
+    ctx.ready();
+    assert.deepEqual(await boundary.promise, { jsonrpc: "2.0", id: 102, error: { code: -32004, message: "not_running" } });
+    await ready.promise;
+  } finally {
+    idle.resolve();
+    runtime.close();
+    await runtime.workerExit;
+    for (const stream of streams) stream.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("interactive delivery steers idle and running roots at native admission", async () => {
   const ctx = new Context();
   const native = agent(ctx);
