@@ -2,6 +2,7 @@
 set -euo pipefail
 
 version=${1:?pass the DSH version}
+candidate_kit=${2:-}
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/sessionbus-dsh-proof.XXXXXX")
 server_pid=
@@ -21,18 +22,20 @@ import path from "node:path";
 
 const [capture, root, token, sessionFile] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(capture, "utf8"));
-const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL";
+const input = "W087_INPUT_SENTINEL", deliveryInput = "W087_DELIVERY_SENTINEL", idleInput = "W100_IDLE_DELIVERY_SENTINEL";
 assert.equal(state.hello, true);
 assert.equal(state.listed, true);
 if (Object.hasOwn(state, "ready")) assert.equal(state.ready, true);
 if (token !== "") {
   assert.equal(state.helloParams.launch_token, token);
   assert.equal(Object.hasOwn(state.helloParams, "groups"), false);
+  assert.equal(state.helloParams.supports_message_run, true);
   assert.deepEqual(state.open.request.params.groups, ["lane-primary", "lane-secondary"]);
   assert.equal(typeof state.open.response.result.session_id, "string");
   assert.equal(state.run.result.result, input);
   assert.deepEqual(state.deliveryReceipt, { disposition: "injected" });
   assert.equal(state.deliveryRun.result.result, deliveryInput);
+  if (state.boundaryDelivery !== undefined) assert.equal(state.boundaryDelivery.error?.code, -32004);
 }
 const files = [];
 const walk = directory => {
@@ -57,10 +60,19 @@ if (token === "") {
     session_id: state.hellos[0].session_id, product: "dsh", groups: ["web-proof"],
   });
   assert.deepEqual(state.peerDeliveryReceipt, { disposition: "injected" });
+  assert.deepEqual(state.idleDeliveryReceipt, { disposition: "injected" });
 }
 assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text" && event.data.content[0].text === input), true);
-assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text" && event.data.content[0].text === deliveryInput), true);
+assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.type === "text"
+  && event.data.content[0].text.includes(`\n${deliveryInput}\n`)
+  && event.data.content[0].text.startsWith("<cross-session-message from=")
+  && event.data.content[0].text.endsWith("\n</cross-session-message>")), true);
 assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === deliveryInput)), true);
+if (token === "") {
+  assert.equal(events.filter(event => event.type === "turn/start").length, 2);
+  assert.equal(events.some(event => event.type === "user/message" && event.data?.content?.[0]?.text?.includes(`\n${idleInput}\n`)), true);
+  assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === idleInput)), true);
+}
 if (token !== "") assert.equal(events.some(event => event.type === "assistant/message" && event.data?.message?.content?.some(part => part.type === "text" && part.text === input)), true);
 const sessionbusCall = events.find(event => event.type === "tool/call" && event.data?.name === "sessionbus");
 assert.ok(sessionbusCall);
@@ -130,6 +142,19 @@ DSH_HOME="$home" "$dsh" plugin --profile dashi add "$root/.github/fixtures/bundl
 for profile in sessionbus web dashi; do
   DSH_HOME="$home" "$dsh" plugin --profile "$profile" add "$tarball"
 done
+if [[ -n "$candidate_kit" ]]; then
+  candidate_kit=$(realpath "$candidate_kit")
+  for profile in sessionbus web dashi; do
+    node --input-type=module - "$home/profiles/$profile/package.json" "$candidate_kit" <<'NODE'
+import fs from "node:fs";
+const [manifest, kit] = process.argv.slice(2);
+const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+pkg.pnpm = { ...pkg.pnpm, overrides: { ...pkg.pnpm?.overrides, "@sessionbus/kit": `file:${kit}` } };
+fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+NODE
+    pnpm --dir "$home/profiles/$profile" install
+  done
+fi
 cp "$home/profiles/sessionbus/package.json" "$work/lane-manifest-before-install.json"
 DSH_HOME="$home" "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh-install"
 cmp -s "$work/lane-manifest-before-install.json" "$home/profiles/sessionbus/package.json"
@@ -192,6 +217,9 @@ const plugin = require(`${home}/profiles/sessionbus/node_modules/@sessionbus/dsh
 console.log(JSON.stringify({ version, plugin, profiles: "PASS", packedInstall: "PASS" }));
 NODE
 
+echo "DSH $version real Agent steer boundary proof"
+(cd "$home" && node --input-type=module < "$root/.github/scripts/prove-agent-steer-boundary.mjs")
+
 fixture="$root/.github/fixtures/sessionbus-tool-call.jsonl"
 peer_fixture="$root/.github/fixtures/sessionbus-peer-rehello.jsonl"
 proof_patch="$root/.github/fixtures/sessionbus-tool-call.patch.yml"
@@ -200,7 +228,7 @@ socket="$work/lane.sock"
 capture="$work/lane-proof.json"
 token="w075-fake-$version"
 echo "DSH $version sessionbus lane permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh worker &
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" sessionbus-dsh worker ${candidate_kit:+boundary} &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
 PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/lane-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/profiles/sessionbus/node_modules/.bin/sessionbus-dsh" --patch "$proof_patch" >"$work/lane.stdout" 2>"$work/lane.stderr" &
@@ -230,7 +258,7 @@ socket="$work/dashi-lane.sock"
 capture="$work/dashi-lane-proof.json"
 token="w084-dashi-lane-$version"
 echo "DSH $version dashi launcher lane permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker &
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker ${candidate_kit:+boundary} &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
 PATH="$home/node_modules/.bin:$PATH" DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/dashi-lane-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" SESSIONBUS_GROUPS='not-json' "$home/node_modules/.bin/dashi" --patch "$proof_patch" >"$work/dashi-lane.stdout" 2>"$work/dashi-lane.stderr" &
@@ -244,7 +272,7 @@ socket="$work/dashi.sock"
 capture="$work/dashi-proof.json"
 token="w077-dashi-$version"
 echo "DSH $version dashi row permission proof"
-node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker &
+node "$root/.github/scripts/fake-permission-sessionbus.mjs" "$socket" "$capture" dashi worker ${candidate_kit:+boundary} &
 server_pid=$!
 for _ in $(seq 1 50); do [[ -S "$socket" ]] && break; sleep 0.1; done
 DSH_HOME="$home" DSH_SNAPSHOT_FILE="$fixture" DSH_W081_SESSION_ROOT="$work/dashi-sessions" SESSIONBUS_SOCKET="$socket" SESSIONBUS_LAUNCH_TOKEN="$token" "$dsh" --profile dashi --patch "$proof_patch" >"$work/dashi.stdout" 2>"$work/dashi.stderr" &
@@ -304,6 +332,10 @@ await rpc("session/selectModel", { request: { sessionId: created.sessionId, prov
 await rpc("session/prompt", { request: { requestId: crypto.randomUUID(), sessionId: created.sessionId, mode: "queue", content: [{ type: "text", text: "W087_INPUT_SENTINEL" }] } });
 NODE
 for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"peerDeliveryReceipt"' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 1 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
+grep -q '"peerDeliveryReceipt"' "$capture"
+[[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 1 ]]
+kill -USR1 "$server_pid"
+for _ in $(seq 1 300); do [[ -s "$capture" ]] && grep -q '"idleDeliveryReceipt"' "$capture" && [[ $(grep -Rh '"type":"turn/end"' "$work/web-sessions" 2>/dev/null | wc -l) -ge 2 ]] && break; kill -0 "$dsh_pid" 2>/dev/null || break; sleep 0.1; done
 assert_permission_proof "$capture" "$work/web-sessions" "" "$work/web-session-id"
 stop_processes
 

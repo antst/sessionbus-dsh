@@ -114,6 +114,15 @@ function textOf(message) {
   return Array.isArray(message?.content) ? message.content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("") : "";
 }
 
+function renderDelivery(request) {
+  const cleanAttribute = (value) => String(value).replace(/["<>\r\n]/gu, "");
+  const escaped = { "<": "\\u003c", ">": "\\u003e", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029" };
+  const metadata = JSON.stringify({ fromProduct: request.from.product, messageId: request.message_id, groups: request.from.groups || [] })
+    .replace(/[<>&\u2028\u2029]/gu, (character) => escaped[character]);
+  const body = request.body.replace(/<\/cross-session-message/giu, "<\\/cross-session-message");
+  return `<cross-session-message from="${cleanAttribute(request.from.name || request.from.session_id)}" from-session="${cleanAttribute(request.from.session_id)}">\n[sessionbus-metadata: ${metadata}]\n${body}\n</cross-session-message>`;
+}
+
 function terminal(reason) {
   const native_stop_reason = reason?.kind;
   if (native_stop_reason === "completed") return { outcome: "completed", native_stop_reason };
@@ -123,10 +132,13 @@ function terminal(reason) {
 }
 
 class NativeSession {
-  constructor(ctx, createUserMessage) {
+  constructor(ctx, createUserMessage, ProtocolError) {
     this.ctx = ctx;
     this.createUserMessage = createUserMessage;
+    this.ProtocolError = ProtocolError;
     this.receipts = new Map();
+    this.deferredAdmissions = [];
+    this.admissionScheduled = false;
     this.removeEvents = ctx.on("session/event", (session, event) => this.event(session, event), { global: true });
   }
 
@@ -166,7 +178,7 @@ class NativeSession {
 
   receipt(message, session, cancel) {
     if (cancel?.aborted) throw cancel.reason || new Error("cancelled");
-    const accepted = { ...deferred(), session };
+    const accepted = { ...deferred(), session, observed: false };
     const abort = () => accepted.reject(cancel.reason || new Error("cancelled"));
     cancel?.addEventListener("abort", abort, { once: true });
     accepted.promise.catch(() => {});
@@ -178,11 +190,28 @@ class NativeSession {
     return accepted;
   }
 
+  deferAdmission(call) {
+    const result = deferred();
+    this.deferredAdmissions.push({ call, result });
+    if (!this.admissionScheduled) {
+      this.admissionScheduled = true;
+      // Let DSH's running-to-idle microtasks settle before one synchronous admission batch.
+      setImmediate(() => {
+        this.admissionScheduled = false;
+        for (const admission of this.deferredAdmissions.splice(0)) {
+          try { admission.result.resolve(admission.call()); }
+          catch (error) { admission.result.reject(error); }
+        }
+      });
+    }
+    return result.promise;
+  }
+
   event(session, event) {
     if (event.type === "agent/inbox/spliced") {
       for (const message of event.data.inserted || []) {
         const receipt = this.receipts.get(message.id);
-        if (receipt?.session === session) receipt.resolve();
+        if (receipt?.session === session) { receipt.observed = true; receipt.resolve(); }
       }
     }
     const run = this.active;
@@ -212,7 +241,7 @@ class NativeSession {
     const delivery = typeof input?.delivery?.body === "string" ? input.delivery : undefined;
     const body = typeof input === "string" ? input : typeof input?.text === "string" ? input.text : delivery?.body;
     if (body === undefined) throw new Error("sessionbus received an unexpected run input seed shape");
-    const message = this.message(body);
+    const message = this.message(delivery ? renderDelivery(delivery) : body);
     const record = { message, openTurn: null, turn: null, output: "", cancelled: deferred() };
     const receipt = this.receipt(message, this.agent.session, cancel);
     this.active = record;
@@ -247,20 +276,37 @@ class NativeSession {
     }
   }
 
-  async deliver(cancel, request, agent = this.agent) {
-    const message = this.message(request.body);
-    if (agent.status === "running") {
-      const receipt = this.receipt(message, agent.session, cancel);
-      try {
-        try { agent.steer(message); }
-        catch (error) { receipt.reject(error); throw error; }
-        await receipt.promise;
-      } finally { receipt.close(); }
-    } else {
-      const event = await agent.session.append("user/message", message, { surfaceOp: "append" });
-      if (event?.type !== "user/message" || event.data?.id !== message.id) throw new Error("DSH did not commit the delivered message");
-    }
-    return { disposition: "injected" };
+  async steerDelivery(cancel, request, agent) {
+    const message = this.message(renderDelivery(request));
+    const receipt = this.receipt(message, agent.session, cancel);
+    try {
+      try { agent.steer(message); }
+      catch (error) {
+        receipt.reject(error);
+        return receipt.observed ? { disposition: "injected" } : { disposition: "rejected", reason: clean(error) };
+      }
+      try { await receipt.promise; }
+      catch (error) {
+        throw new this.ProtocolError({ code: -32603, message: "internal", data: { kind: "delivery_admission_uncertain", message_id: request.message_id, reason: clean(error) } });
+      }
+      return { disposition: "injected" };
+    } finally { receipt.close(); }
+  }
+
+  deliver(cancel, request, agent = this.agent, live = () => agent === this.agent) {
+    return this.deferAdmission(() => cancel?.aborted || !live()
+      ? { disposition: "rejected", reason: "native owner closed" }
+      : this.steerDelivery(cancel, request, agent));
+  }
+
+  laneDeliver(cancel, request, token) {
+    return this.deferAdmission(() => {
+      const run = token?.Native;
+      if (cancel?.aborted || !run || this.active !== run || run.end || this.agent.status !== "running") {
+        throw new this.ProtocolError({ code: -32004, message: "not_running" });
+      }
+      return this.steerDelivery(cancel, request, this.agent);
+    });
   }
 
   async close() {
@@ -288,7 +334,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   const values = configured.settings;
   const active = dependencies.active || (() => true);
   let launchToken = configured.token;
-  const native = new NativeSession(ctx, dependencies.createUserMessage);
+  const native = new NativeSession(ctx, dependencies.createUserMessage, dependencies.ProtocolError || kit.ProtocolError);
   const peers = new Map();
   const publicationErrors = new WeakSet();
   let worker;
@@ -319,7 +365,8 @@ function createRuntime(ctx, config, dependencies, prepared) {
       const current = identity(ctx, agent, values.product, values.groups);
       if (!current) { trace(`present id=${agent?.id || "unknown"} root=${isRoot} reason=no-session-id`); return; }
       const record = { peer: undefined, identity: current, rehello: Promise.resolve() };
-      const peer = dependencies.connectPeer(current, (cancel, request) => native.deliver(cancel, request, agent), connectionEnvironment(values), {
+      const peer = dependencies.connectPeer(current, (cancel, request) =>
+        native.deliver(cancel, request, agent, () => root(agent) && peers.get(agent) === record), connectionEnvironment(values), {
         connect: (socket) => {
           trace(`connect id=${current.session_id} socket=${socket}`);
           const stream = net.createConnection(socket);
@@ -388,11 +435,11 @@ function createRuntime(ctx, config, dependencies, prepared) {
       const environment = connectionEnvironment(values, launchToken);
       launchToken = undefined;
       worker = dependencies.serveWorker({
-        hello: () => ({ product: values.product, version, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [] }),
+        hello: () => ({ product: values.product, version, supports_message_run: true, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [] }),
         open: (_cancel, request) => native.open(request),
         run: (cancel, token, input) => native.run(cancel, token, input),
         interrupt: (cancel, token) => native.interrupt(cancel, token),
-        deliver: (cancel, request) => native.deliver(cancel, request),
+        deliver: (cancel, request, _identity, token) => native.laneDeliver(cancel, request, token),
         close: () => native.close(),
       }, environment);
       workerExit = worker.closed.then(async () => {

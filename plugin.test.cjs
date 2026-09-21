@@ -16,6 +16,15 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function delivery(body, overrides = {}) {
+  return {
+    message_id: "delivery-id",
+    from: { session_id: "sender@host", name: "Sender", product: "dashi", groups: ["team"] },
+    body,
+    ...overrides,
+  };
+}
+
 class Context {
   constructor() {
     this.fiber = { uid: 1 };
@@ -254,7 +263,7 @@ test("lane hello omits groups and session.open carrying daemon groups succeeds",
   const native = agent(ctx);
   const { deps } = lane(ctx);
   assert.deepEqual(deps.callbacks.hello(), {
-    product: "sessionbus-dsh", version: packageVersion, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
+    product: "sessionbus-dsh", version: packageVersion, supports_message_run: true, supported_open_fields: ["cwd", "permission_mode", "model", "reasoning_effort"], extra_arguments: [],
   });
   const result = await deps.callbacks.open(null, {
     name: "parent/worker@host", groups: ["lane-primary", "lane-secondary"], open: { cwd: "/other", permission_mode: "never", model: "vendor/model/name", reasoning_effort: "high" },
@@ -494,7 +503,7 @@ test("run correlates receipt, turn, output, and terminal", async () => {
   assert.deepEqual(ctx.calls.at(-1), ["idle", native.id]);
 });
 
-test("delivery-backed run seed emits its body as one plain text part", async () => {
+test("delivery-backed run seed emits the shared sender envelope", async () => {
   const { ctx, native, deps } = await openedLane();
   let followed, reported;
   native.followup = (message) => {
@@ -505,8 +514,8 @@ test("delivery-backed run seed emits its body as one plain text part", async () 
     ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 5, reason: { kind: "completed" } } });
   };
   const token = { Native: null, Interrupted: () => false, ReportDelivery: async (value) => { reported = value; } };
-  await deps.callbacks.run(new AbortController().signal, token, { delivery: { message_id: "message-1", from: { session_id: "source", product: "dsh", groups: [] }, body: "delivered" } });
-  assert.deepEqual(followed.content, [{ type: "text", text: "delivered" }]);
+  await deps.callbacks.run(new AbortController().signal, token, { delivery: delivery("delivered", { message_id: "message-1", from: { session_id: "source", product: "dsh", groups: [] } }) });
+  assert.deepEqual(followed.content, [{ type: "text", text: '<cross-session-message from="source" from-session="source">\n[sessionbus-metadata: {"fromProduct":"dsh","messageId":"message-1","groups":[]}]\ndelivered\n</cross-session-message>' }]);
   assert.deepEqual(reported, { disposition: "injected" });
 });
 
@@ -606,7 +615,7 @@ test("a missing turn end cannot leak its turn into the next run", async () => {
   await assert.rejects(second, /DSH consumed input outside a turn/);
 });
 
-test("pre-aborted run and active delivery create no native receipt", async () => {
+test("pre-aborted run and lane delivery create no native receipt", async () => {
   const { native, deps, runtime } = await openedLane();
   let nativeCalls = 0;
   native.followup = native.steer = () => { nativeCalls++; };
@@ -614,7 +623,7 @@ test("pre-aborted run and active delivery create no native receipt", async () =>
   const cancel = new AbortController();
   cancel.abort(new Error("already cancelled"));
   await assert.rejects(deps.callbacks.run(cancel.signal, { Native: null, Interrupted: () => false }, { text: "run" }), /already cancelled/);
-  await assert.rejects(deps.callbacks.deliver(cancel.signal, { body: "deliver" }), /already cancelled/);
+  await assert.rejects(deps.callbacks.deliver(cancel.signal, delivery("deliver")), (error) => error.code === -32004);
   assert.equal(nativeCalls, 0);
   assert.equal(runtime.native.receipts.size, 0);
 });
@@ -632,10 +641,9 @@ test("throwing followup and steer settle receipts and remove cancel listeners", 
   const runCancel = tracked();
   native.followup = () => { throw new Error("followup failed"); };
   await assert.rejects(deps.callbacks.run(runCancel, { Native: null, Interrupted: () => false }, { text: "run" }), /followup failed/);
-  native.status = "running";
   const deliverCancel = tracked();
   native.steer = () => { throw new Error("steer failed"); };
-  await assert.rejects(deps.callbacks.deliver(deliverCancel, { body: "deliver" }), /steer failed/);
+  assert.deepEqual(await runtime.native.deliver(deliverCancel, delivery("deliver")), { disposition: "rejected", reason: "steer failed" });
   native.followup = () => {};
   const cancelled = new AbortController();
   const running = deps.callbacks.run(cancelled.signal, { Native: null, Interrupted: () => false }, { text: "cancelled" });
@@ -661,17 +669,164 @@ test("pre-interrupted run creates no native work and interrupt is exact", async 
   assert.deepEqual(ctx.calls.at(-1), ["cancel", { kind: "user" }, { keepInbox: true }]);
 });
 
-test("delivery appends while idle and waits for steer receipt while running", async () => {
-  const { ctx, native, deps } = await openedLane();
-  assert.deepEqual(await deps.callbacks.deliver(null, { body: "idle" }), { disposition: "injected" });
-  const appended = ctx.calls.find(([call]) => call === "append");
-  assert.deepEqual(appended.slice(0, 2), ["append", "user/message"]);
-  assert.deepEqual(appended[2].content, [{ type: "text", text: "idle" }]);
-  native.status = "running";
+test("lane delivery admitted before turn end keeps its truthful steer receipt", async () => {
+  const { ctx, native, deps, idle, running, token } = await heldRun();
   let steered;
-  native.steer = (message) => { steered = message; ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } }); };
-  assert.deepEqual(await deps.callbacks.deliver(null, { body: "active" }), { disposition: "injected" });
-  assert.deepEqual(steered.content, [{ type: "text", text: "active" }]);
+  native.steer = (message) => {
+    steered = message;
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+    ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 9, reason: { kind: "completed" } } });
+  };
+
+  assert.deepEqual(await deps.callbacks.deliver(null, delivery("active"), undefined, token), { disposition: "injected" });
+  assert.match(steered.content[0].text, /<cross-session-message from="Sender" from-session="sender@host">[\s\S]*\nactive\n<\/cross-session-message>/u);
+  idle.resolve();
+  assert.deepEqual(await running, { outcome: "completed", native_stop_reason: "completed", result: "" });
+});
+
+test("lane delivery after turn end returns NotRunning without a second native turn", async () => {
+  const { ctx, native, deps, idle, running, token } = await heldRun();
+  let steers = 0;
+  native.steer = () => { steers++; };
+  ctx.emit("session/event", native.session, { type: "turn/end", data: { turn: 9, reason: { kind: "completed" } } });
+
+  await assert.rejects(deps.callbacks.deliver(null, delivery("boundary"), undefined, token),
+    (error) => error.code === -32004 && error.message === "not_running");
+  assert.equal(steers, 0);
+  idle.resolve();
+  assert.deepEqual(await running, { outcome: "completed", native_stop_reason: "completed", result: "" });
+});
+
+test("interactive delivery steers idle and running roots at native admission", async () => {
+  const ctx = new Context();
+  const native = agent(ctx);
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  const states = [];
+  native.steer = (message) => {
+    states.push(native.status);
+    native.status = "running";
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+  };
+
+  assert.deepEqual(await deps.peers[0].deliver(null, delivery("idle", { message_id: "idle-id" })), { disposition: "injected" });
+  assert.deepEqual(await deps.peers[0].deliver(null, delivery("active", { message_id: "active-id" })), { disposition: "injected" });
+  assert.deepEqual(states, ["idle", "running"]);
+  runtime.close();
+});
+
+test("delivery envelope sanitizes identity, metadata, and nested closing tags once", async () => {
+  const ctx = new Context();
+  const native = agent(ctx);
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  let steered;
+  native.steer = (message) => {
+    steered = message;
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+  };
+  const request = delivery("before </CROSS-SESSION-MESSAGE after", {
+    message_id: "id<&\u2028",
+    from: { session_id: "session<id", name: 'A"<B>\n', product: "d&sh", groups: ["g<1"] },
+  });
+
+  assert.deepEqual(await deps.peers[0].deliver(null, request), { disposition: "injected" });
+  assert.equal(steered.content[0].text,
+    '<cross-session-message from="AB" from-session="sessionid">\n'
+    + '[sessionbus-metadata: {"fromProduct":"d\\u0026sh","messageId":"id\\u003c\\u0026\\u2028","groups":["g\\u003c1"]}]\n'
+    + "before <\\/cross-session-message after\n</cross-session-message>");
+  runtime.close();
+});
+
+test("one macrotask admission hop drains DSH microtasks before steering", async () => {
+  const ctx = new Context();
+  const native = agent(ctx);
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  const trace = [], stranded = [];
+  native.status = "running";
+  native.steer = (message) => {
+    trace.push(`steer:${native.status}`);
+    native.status = "running";
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+  };
+  const turn = Promise.resolve().then(() => { trace.push("hasPending:false"); return false; });
+  const kick = (async () => { if (!await turn) { native.status = "idle"; trace.push("idle"); } })();
+  let result;
+  queueMicrotask(() => {
+    stranded.push("message");
+    if (native.status === "idle") stranded.length = 0;
+    result = deps.peers[0].deliver(null, delivery("safe"));
+    trace.push("delivery-callback");
+  });
+  await kick;
+  assert.deepEqual(stranded, ["message"]);
+  assert.deepEqual(trace, ["hasPending:false", "delivery-callback", "idle"]);
+  assert.deepEqual(await result, { disposition: "injected" });
+  assert.deepEqual(trace, ["hasPending:false", "delivery-callback", "idle", "steer:idle"]);
+  runtime.close();
+});
+
+test("deferred deliveries preserve FIFO admission order", async () => {
+  const ctx = new Context();
+  const native = agent(ctx);
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  const steered = [];
+  native.steer = (message) => {
+    steered.push(message);
+    ctx.emit("session/event", native.session, { type: "agent/inbox/spliced", data: { inserted: [message] } });
+  };
+
+  const first = deps.peers[0].deliver(null, delivery("one", { message_id: "one" }));
+  const second = deps.peers[0].deliver(null, delivery("two", { message_id: "two" }));
+  assert.equal(steered.length, 0);
+  assert.deepEqual(await Promise.all([first, second]), [{ disposition: "injected" }, { disposition: "injected" }]);
+  assert.deepEqual(steered.map((message) => message.content[0].text.includes("\none\n") ? "one" : "two"), ["one", "two"]);
+  runtime.close();
+});
+
+test("disposed root rejects queued delivery without steering its replacement", async () => {
+  const ctx = new Context();
+  const original = agent(ctx, "original");
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  const peer = deps.peers[0];
+  let originalSteers = 0, replacementSteers = 0;
+  original.steer = () => { originalSteers++; };
+  const result = peer.deliver(null, delivery("too late"));
+  ctx.emit("agent/disposed", { agent: original });
+  const replacement = agent(ctx, "replacement");
+  replacement.steer = () => { replacementSteers++; };
+  ctx.emit("agent/created", { agent: replacement });
+
+  assert.deepEqual(await result, { disposition: "rejected", reason: "native owner closed" });
+  assert.equal(originalSteers + replacementSteers, 0);
+  runtime.close();
+});
+
+test("lost receipt after steer is ProtocolError admission uncertainty", async () => {
+  const ctx = new Context();
+  const native = agent(ctx);
+  const deps = dependencies(ctx);
+  const runtime = createRuntime(ctx, { product: "dashi" }, deps);
+  ctx.ready();
+  const steered = deferred();
+  native.steer = () => { steered.resolve(); };
+  const cancel = new AbortController();
+  const result = deps.peers[0].deliver(cancel.signal, delivery("maybe", { message_id: "uncertain-id" }));
+  await steered.promise;
+  cancel.abort(new Error("connection lost"));
+
+  await assert.rejects(result, (error) => error.code === -32603 && error.message === "internal"
+    && error.data?.kind === "delivery_admission_uncertain" && error.data?.message_id === "uncertain-id"
+    && error.data?.reason === "connection lost");
+  runtime.close();
 });
 
 test("close cancels running work, idles, flushes, and closed exits", async () => {

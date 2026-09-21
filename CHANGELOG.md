@@ -3,6 +3,7 @@
 ## 0.1.0-pre.14 — 2026-09-21
 
 - Replace the `/sessionbus` list command with a user- and model-invocable DSH skill so `/sessionbus <text>` stays the user's message and receives canonical Sessionbus guidance (W-099).
+- Wake idle interactive roots through DSH steering, carry the canonical sender envelope on delivered input, and advertise daemon-owned message-triggered lane runs with boundary-safe native admission (W-100).
 
 ## 0.1.0-pre.13 — 2026-09-21
 
