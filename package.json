@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@antst/dsh-file-uploads-none": "^0.1.0",
-    "@sessionbus/kit": "0.5.5"
+    "@sessionbus/kit": "0.5.7"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
