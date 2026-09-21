@@ -16,7 +16,7 @@ test("package metadata stays rooted in the standalone repository", () => {
     url: "git+https://github.com/antst/sessionbus-dsh.git",
   });
   assert.deepEqual(manifest.bin, { "sessionbus-dsh": "launcher.mjs", "sessionbus-dsh-install": "bin.mjs" });
-  assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "plugin.cjs", "launcher.mjs", "bin.mjs", "install.mjs"]);
+  assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "skills/sessionbus.md", "plugin.cjs", "launcher.mjs", "bin.mjs", "install.mjs"]);
   assert.equal(manifest.dependencies["@antst/dsh-file-uploads-none"], "^0.1.0");
   assert.match(manifest.dependencies["@sessionbus/kit"], /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/);
   for (const [name, range] of Object.entries(manifest.peerDependencies)) if (name.startsWith("@deepseek-ai/dsh-")) assert.equal(range, ">=0.1.5-rc.2");

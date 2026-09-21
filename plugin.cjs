@@ -1,10 +1,12 @@
 "use strict";
 
 const net = require("node:net");
+const fs = require("node:fs");
 const path = require("node:path");
 const kit = require("@sessionbus/kit");
 const version = require("./package.json").version;
 const { ACTIONS } = kit;
+const skillContent = fs.readFileSync(path.join(__dirname, "skills/sessionbus.md"), "utf8");
 
 // Match the MCP tool's closed union; the public kit validates each action.
 function argumentSchema() {
@@ -35,8 +37,8 @@ function assertKnownArguments(value, schema, location = "arguments") {
 const name = "sessionbus-dsh";
 const productPattern = /^[a-z0-9][a-z0-9-]{0,31}$/u;
 const inject = [
-  "agents", "appReady", "appExit", "commands", "permissionPresets",
-  "sessionController", "sessions", "sessionTitle", "tools",
+  "agents", "appReady", "appExit", "permissionPresets", "sessionController",
+  "sessions", "sessionTitle", "skills", "tools",
 ];
 function deferred() {
   let resolve, reject;
@@ -367,15 +369,17 @@ function createRuntime(ctx, config, dependencies, prepared) {
   } catch (error) { throw new Error(`cannot grant sessionbus tool permission: ${clean(error)}`); }
   const removeTool = ctx.tools.register(dependencies.defineTool({
     name: "sessionbus",
-    description: "List, message, spawn and control Sessionbus sessions. Use trace mode off, events or content to configure live parent tracing for a direct child; spawn trace sets its initial mode.",
+    description: "Call Sessionbus with an action from the list, send, spawn, describe, trace, run, start, wait, status, interrupt, close, forget, or ack enum. Use trace mode off, events or content for a direct child. Read the sessionbus skill for exact arguments, caller identity, delivery dispositions, lane policies, collection and acknowledgment discipline, tracing, and safe replies.",
     parameters: { action: { type: "string", enum: ACTIONS, required: true }, arguments: argumentsSchema },
     output: { schema: { type: "object", additionalProperties: true, properties: {} }, render: (_args, result) => [{ type: "text", text: JSON.stringify(result) }] },
     execute,
   }));
-  const removeCommand = ctx.commands.register({
+  const removeSkill = ctx.skills.register({
     name: "sessionbus",
-    description: "list sessionbus sessions",
-    handler: async (invocation) => ({ kind: "success", text: JSON.stringify(await execute({ action: "list", arguments: {} }, { agent: invocation.agent })) }),
+    description: "Discover and message Sessionbus peers, trace direct child traffic, and create, run, collect, close and resume Sessionbus lanes through the single tool.",
+    source: "runtime",
+    content: skillContent,
+    invocation: { modelInvocable: true, userInvocable: true },
   });
   const start = () => {
     ready = true;
@@ -403,7 +407,7 @@ function createRuntime(ctx, config, dependencies, prepared) {
   const removeReady = ctx.appReady.onReady(start);
   const close = () => {
     trace(`mode=${values.mode} ready=false reason=close`);
-    removeReady(); removeCreated(); removeDisposed(); removeTitle(); removeCommand(); removeGrant(); removeTool();
+    removeReady(); removeCreated(); removeDisposed(); removeTitle(); removeSkill(); removeGrant(); removeTool();
     for (const agent of peers.keys()) forget(agent);
     worker?.shutdown(); native.removeEvents();
   };
