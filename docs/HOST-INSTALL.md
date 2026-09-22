@@ -5,10 +5,11 @@ example. Run it as the ordinary account returned by `id -un`, never with
 `sudo`, and refer to its home as `$HOME` in commands. On `umka-dev1` that
 account is `antst` and its home is `/home/antst`; earlier references to `pdev`
 were wrong. The target set is DSH `0.1.5-rc.2`, `@antst/dashi-launcher`
-`0.1.0`, `@antst/dashi-app` `0.1.0`, and
-`@sessionbus/dsh` `0.1.0-pre.13`. Earlier Sessionbus-dsh prereleases are
-superseded; pre.3 and pre.5 were never published. Do not continue past a
-failed assertion.
+`0.1.2`, `@antst/dashi-app` `0.1.2`, `@sessionbus/dsh`
+`0.1.0-pre.14`, `@sessionbus/kit` `0.5.7`, and the Sessionbus daemon
+`v0.5.7` at revision `53c5f80e281f39e54bcee1fbe8a253da86ad1c08`.
+Earlier Sessionbus-dsh prereleases are superseded; pre.3 and pre.5 were never
+published. Do not continue past a failed assertion.
 
 This runbook is the real-daemon acceptance procedure for DSH `0.1.5-rc.2`.
 The equivalent acceptance on `0.1.6-alpha.2` is still outstanding.
@@ -18,29 +19,58 @@ None of the commands below prints `SESSIONBUS_LAUNCH_TOKEN`,
 environment assignments intentionally displayed are the daemon's filtered
 `PATH=` and `SESSIONBUS_PRODUCTS=` lines.
 
-Dashi alpha.18 lacked the `sessionbus` profile row and the launcher token
-path. Alpha.19 was partially published and must not be installed. Dashi 0.1.0
-carries the built tarballs and the plugin re-pin; dashi-app alpha.20 tarballs
-were empty and must not be installed. Run
-these exact probes immediately before starting:
+### Release history, not install targets
+
+Dashi alpha.18 lacked the `sessionbus` profile row and launcher token path.
+Alpha.19 was partially published, alpha.20 carried empty application
+tarballs, and alpha.21 repaired the release pipeline. Dashi 0.1.0 was the
+first stable cut. They are historical releases, not install targets for this
+runbook.
+
+Run these exact probes immediately before starting:
 
 ```sh
-npm view @antst/dashi-launcher@0.1.0 version && npm view @antst/dashi-app@0.1.0 version && npm view @antst/dsh-file-uploads-none@0.1.0 version
-npm view @sessionbus/dsh@0.1.0-pre.13 version && npm view @sessionbus/kit@0.5.5 version
+npm view @antst/dashi@0.1.2 version && npm view @antst/dashi-app@0.1.2 version
+npm view @antst/dashi-launcher@0.1.2 version && npm view @antst/dsh-file-uploads-none@0.1.2 version
+npm view @sessionbus/dsh@0.1.0-pre.14 version && npm view @sessionbus/kit@0.5.7 version
 ```
 
 Expected output, in order:
 
 ```text
-0.1.0
-0.1.0
-0.1.0
-0.1.0-pre.13
-0.5.5
+0.1.2
+0.1.2
+0.1.2
+0.1.2
+0.1.0-pre.14
+0.5.7
 ```
 
 An `E404` means stop; it is not permission to substitute a preview URL or a
-different version.
+different version. A freshly published version can resolve before all four
+dashi tarballs propagate. HEAD every tarball until each returns HTTP 200
+before the first profile add:
+
+```sh
+for package in \
+  @antst/dashi@0.1.2 \
+  @antst/dashi-app@0.1.2 \
+  @antst/dashi-launcher@0.1.2 \
+  @antst/dsh-file-uploads-none@0.1.2; do
+  tarball=$(npm view "$package" dist.tarball)
+  ready=
+  for attempt in $(seq 1 60); do
+    status=$(curl --head --location --silent --show-error --output /dev/null --write-out '%{http_code}' "$tarball" || true)
+    if [ "$status" = 200 ]; then ready=1; break; fi
+    sleep 5
+  done
+  test "$ready" = 1
+  printf '%s tarball HTTP 200\n' "$package"
+done
+```
+
+Expected output is four `tarball HTTP 200` lines. Any other final status stops
+the run before package metadata or the physical graph can be changed.
 
 ## 1. Preflight inventory
 
@@ -170,6 +200,9 @@ SESSIONBUS_SERVICE_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/sessionbus/service.env
 SERVICE_DROPIN="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/sessionbus.service.d/override.conf"
 printf 'lane cwd=%s\n%s\nunit=%s\n' "$LANE_CWD" "$SERVICE_PATH_LINE" "$SERVICE_UNIT_PATH"
 PATH="$SERVICE_PATH" command -v sessionbus
+SESSIONBUS_DAEMON_VERSION=$(PATH="$SERVICE_PATH" sessionbus --version)
+printf 'daemon version=%s\n' "$SESSIONBUS_DAEMON_VERSION"
+test "$SESSIONBUS_DAEMON_VERSION" = 'sessionbus v0.5.7 (53c5f80e281f39e54bcee1fbe8a253da86ad1c08)'
 if PATH="$SERVICE_PATH" command -v sessionbus-dsh dsh >/dev/null 2>&1; then
   printf '%s\n' 'service PATH already resolves sessionbus-dsh and dsh'
 else
@@ -189,6 +222,7 @@ active service:
 lane cwd=/home/antst/e2e-work
 PATH=/home/antst/.local/bin:/usr/local/bin:/usr/bin:/bin
 /home/antst/.local/bin/sessionbus
+daemon version=sessionbus v0.5.7 (53c5f80e281f39e54bcee1fbe8a253da86ad1c08)
 service PATH does not resolve sessionbus-dsh and dsh
 Environment=<redacted>
 EnvironmentFile=<redacted>
@@ -631,26 +665,54 @@ install must print both `Lockfile is up to date, resolution step is skipped` and
 `prune` and `install --frozen-lockfile --force` both left such directories in
 place on a hoisted profile during the measured in-place-upgrade reproduction.
 
-## 3. Upgrade dashi to 0.1.0 in place
+## 3. Upgrade dashi to 0.1.2 in place
 
 Upgrade the host launcher, then immediately re-check the host graph because a
 host-level `pnpm add` may re-resolve peers:
 
 ```sh
 cd "$DSH_INSTALL_DIR"
-pnpm add --save-exact @antst/dashi-launcher@0.1.0
+pnpm add --save-exact @antst/dashi-launcher@0.1.2
 test -x "$DASHI_BIN"
 repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
 ```
 
-Expected output reports launcher `0.1.0`, then a nonzero host DSH
+Expected output reports launcher `0.1.2`, then a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
 Upgrade the existing dashi profile rather than replacing it, and re-check that
-profile immediately after the add:
+profile immediately after the add. If the add fails after touching the
+physical tree, the failure branch restores the manifest and lock byte-for-byte,
+permits the first frozen install to relink disturbed packages, requires the
+second frozen install to be a full no-op, and proves the physical graph equals
+the pre-step state. It then stops; do not retry until all four tarball HEAD
+checks pass.
 
 ```sh
-"$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.0
+if ! "$DSH_BIN" plugin --profile dashi add @antst/dashi-app@0.1.2; then
+  printf '%s\n' 'dashi profile add failed; restoring the pre-step graph' >&2
+  cp --preserve=mode "$ROLLBACK_ROOT/profiles/dashi/package.json" "$DSH_HOME/profiles/dashi/package.json"
+  cp --preserve=mode "$ROLLBACK_ROOT/profiles/dashi/pnpm-lock.yaml" "$DSH_HOME/profiles/dashi/pnpm-lock.yaml"
+  cmp -s "$ROLLBACK_ROOT/profiles/dashi/package.json" "$DSH_HOME/profiles/dashi/package.json"
+  cmp -s "$ROLLBACK_ROOT/profiles/dashi/pnpm-lock.yaml" "$DSH_HOME/profiles/dashi/pnpm-lock.yaml"
+
+  first_install=$(pnpm --dir "$DSH_HOME/profiles/dashi" install --frozen-lockfile 2>&1)
+  printf '%s\n' "$first_install"
+  printf '%s\n' "$first_install" | grep -Fqx 'Lockfile is up to date, resolution step is skipped'
+
+  second_install=$(pnpm --dir "$DSH_HOME/profiles/dashi" install --frozen-lockfile 2>&1)
+  printf '%s\n' "$second_install"
+  printf '%s\n' "$second_install" | grep -Fqx 'Lockfile is up to date, resolution step is skipped'
+  printf '%s\n' "$second_install" | grep -Fqx 'Already up to date'
+
+  remove_untracked_nested_packages "$DSH_HOME/profiles/dashi"
+  . "$ROLLBACK_ROOT/versions.env"
+  test "$(node -p 'require(process.argv[1]).version' "$DSH_HOME/profiles/dashi/node_modules/@antst/dashi-app/package.json")" = "$PREVIOUS_DASHI_APP_VERSION"
+  test "$(node -p 'require(process.argv[1]).version' "$DSH_HOME/profiles/dashi/node_modules/@sessionbus/dsh/package.json")" = "$PREVIOUS_DASHI_SESSIONBUS_DSH_VERSION"
+  check_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
+  printf '%s\n' 'pre-step dashi profile graph restored; stop before retry' >&2
+  exit 1
+fi
 remove_untracked_nested_packages "$DSH_HOME/profiles/dashi"
 repair_dsh_graph "$DSH_HOME/profiles/dashi" 0.1.5-rc.2 required dashi
 if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq "^  '?@deepseek-ai/dsh[^@']*@"; then
@@ -659,10 +721,11 @@ if ! sed '/^snapshots:/,$d' "$DSH_HOME/profiles/dashi/pnpm-lock.yaml" | grep -Eq
 fi
 printf '%s\n' 'dashi profile DSH graph nonzero'
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @antst/dashi-app @sessionbus/dsh
+test "$(node -p 'require(process.argv[1]).version' "$DSH_HOME/profiles/dashi/node_modules/@sessionbus/kit/package.json")" = 0.5.7
 ```
 
 Expected output contains `dashi profile DSH graph nonzero`,
-`@antst/dashi-app 0.1.0`, and a DSH package count at the single version
+`@antst/dashi-app 0.1.2`, and a DSH package count at the single version
 `0.1.5-rc.2`. The count `11` was observed in a clean rebuilt profile, but it is
 inventory only and is never an acceptance criterion. The pre-existing
 `@sessionbus/dsh` row remains at its old version until the next section.
@@ -675,12 +738,13 @@ launcher and installer find their child `dsh`:
 
 ```sh
 cd "$DSH_INSTALL_DIR"
-pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.13
+pnpm add --save-exact @sessionbus/dsh@0.1.0-pre.14
 test -x "$HOST_BIN_DIR/sessionbus-dsh"
 repair_dsh_graph "$DSH_INSTALL_DIR" 0.1.5-rc.2 report headless
+test "$(node -p 'require(process.argv[1]).version' "$DSH_INSTALL_DIR/node_modules/@sessionbus/kit/package.json")" = 0.5.7
 ```
 
-Expected output reports `@sessionbus/dsh 0.1.0-pre.13` and a nonzero host DSH
+Expected output reports `@sessionbus/dsh 0.1.0-pre.14` and a nonzero host DSH
 count at the single version `0.1.5-rc.2`.
 
 Upgrade the installed sessionbus profile in place. Re-running the installer
@@ -694,23 +758,24 @@ Starting with `@sessionbus/dsh@0.1.0-pre.8`, re-running the installer merges its
 dependency, row, and base-bundle entry into the existing profile manifest; it
 does not remove provider packages, other bundles, or other manifest fields.
 
-`@antst/dashi-app@0.1.0` and later already ship the `sessionbus` row
+`@antst/dashi-app@0.1.2` and later already ship the `sessionbus` row
 and their exact `@sessionbus/dsh` dependency. Do not run the installer against
 the dashi profile: the dashi product runs the plugin version that dashi-app
 pins, until dashi-app publishes a newer pin.
 
 ```sh
-"$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.13
+"$DSH_BIN" plugin --profile sessionbus add @sessionbus/dsh@0.1.0-pre.14
 repair_dsh_graph "$DSH_HOME/profiles/sessionbus" 0.1.5-rc.2 optional sessionbus
 "$DSH_BIN" plugin --profile sessionbus exec sessionbus-dsh-install
 remove_untracked_nested_packages "$DSH_HOME/profiles/sessionbus"
 pnpm --dir "$DSH_HOME/profiles/sessionbus" list --depth 0 @sessionbus/dsh
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0 @sessionbus/dsh
+test "$(node -p 'require(process.argv[1]).version' "$DSH_HOME/profiles/sessionbus/node_modules/@sessionbus/kit/package.json")" = 0.5.7
 grep -F 'config: { mode: lane, product: sessionbus-dsh }' "$DSH_HOME/profiles/sessionbus/cordis.patch.yml"
 grep -F 'config: { product: dashi }' "$DSH_HOME/profiles/dashi/node_modules/@antst/dashi-app/cordis.patch.yml"
 ```
 
-Expected output contains `@sessionbus/dsh 0.1.0-pre.13` for the sessionbus
+Expected output contains `@sessionbus/dsh 0.1.0-pre.14` for the sessionbus
 profile and the exact version pinned by dashi-app for the dashi profile, no DSH
 version other than rc.2 in the lane graph (which may have zero DSH records),
 and these exact rows:
@@ -727,10 +792,11 @@ group. Re-check its graph immediately after the package add:
 ```sh
 test ! -e "$DSH_HOME/profiles/web"
 "$DSH_BIN" --profile web --dump-default-config >"$ROLLBACK_ROOT/web-default-config.yml"
-"$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.13
+"$DSH_BIN" plugin --profile web add @sessionbus/dsh@0.1.0-pre.14
 repair_dsh_graph "$DSH_HOME/profiles/web" 0.1.5-rc.2 optional web
 "$DSH_BIN" plugin --profile web exec sessionbus-dsh-install --product dsh web
 remove_untracked_nested_packages "$DSH_HOME/profiles/web"
+test "$(node -p 'require(process.argv[1]).version' "$DSH_HOME/profiles/web/node_modules/@sessionbus/kit/package.json")" = 0.5.7
 grep -F 'config: { product: dsh }' "$DSH_HOME/profiles/web/cordis.patch.yml"
 if grep -Eq '(^|[[:space:]{,])groups:' "$DSH_HOME/profiles/web/cordis.patch.yml"; then
   printf '%s\n' 'unexpected configured groups in web profile' >&2
@@ -805,6 +871,7 @@ SERVICE_PATH_LINE=$(tr '\0' '\n' < "/proc/$SESSIONBUS_PID/environ" | grep '^PATH
 SERVICE_PATH=${SERVICE_PATH_LINE#PATH=}
 printf '%s\n' "$SERVICE_PATH_LINE"
 PATH="$SERVICE_PATH" command -v sessionbus-dsh dsh
+PATH="$SERVICE_PATH" sessionbus --version
 sessionbus roster --local --json | node --input-type=module -e '
   let body = ""; for await (const chunk of process.stdin) body += chunk
   const products = JSON.parse(body).local.products
@@ -822,6 +889,7 @@ active
 PATH=/home/antst/node_modules/.bin:/home/antst/.local/bin:/usr/local/bin:/usr/bin:/bin
 /home/antst/node_modules/.bin/sessionbus-dsh
 /home/antst/node_modules/.bin/dsh
+sessionbus v0.5.7 (53c5f80e281f39e54bcee1fbe8a253da86ad1c08)
 sessionbus-dsh advertised: true
 ```
 
@@ -909,7 +977,7 @@ packages first:
 pnpm --dir "$DSH_HOME/profiles/dashi" list --depth 0
 ```
 
-Expected output contains `@antst/dashi-app 0.1.0` and the selected
+Expected output contains `@antst/dashi-app 0.1.2` and the selected
 provider's direct plugin packages with their exact installed versions.
 
 The umka worked example selects `deepseek-official`, so it adds no provider
@@ -1112,6 +1180,23 @@ stops the run before the real-daemon turn.
 
 ## 6. Verification on the real daemon
 
+Plugin pre.14 makes both interactive and managed-lane delivery active. An
+interactive message admitted while its DSH root is idle starts a native turn.
+For a lane, the daemon's default `idle_message: run` policy seeds one managed
+Run when an ordinary message reaches the idle worker. In dashi,
+`/sessionbus <free text>` is a DSH skill invocation: the typed text remains the
+user message and the Sessionbus operating instructions are injected as skill
+context before the model turn.
+
+Use one long-lived originating controller built against Sessionbus SDK 0.5.7
+or later for each spawn cell, and keep it connected through the terminal
+record, acknowledgment, and close. Older callers with the pre-`policy.trace`
+closed response schema can reject the successful Open response and disconnect;
+the daemon has already committed the child, but the detached caller then sees
+RPC `-32002 not_connected`. A one-shot caller is also invalid because its
+identity disappears immediately after the call. Record the controller's
+authenticated identity and SDK version before proceeding.
+
 ### Lane: package-owned launcher selects `dsh --profile sessionbus`
 
 From the existing remote Sessionbus peer, first prove federated product
@@ -1141,18 +1226,22 @@ printf '%s\n' 'daemon child baseline recorded'
 Expected output is `daemon child baseline recorded`; child IDs are retained in
 the shell and not printed.
 
-From the remote peer, make the spawn and run calls below. Replace `LANE_CWD`
-only with the exact `$LANE_CWD` printed during preflight
-(`/home/antst/e2e-work` on umka-dev1); replace returned IDs only after
-successful calls:
+Through the one long-lived controller, make the spawn, ordinary send, and wait
+calls below. Replace `LANE_CWD` only with the exact `$LANE_CWD` printed during
+preflight (`/home/antst/e2e-work` on umka-dev1); replace returned IDs only
+after successful calls. Deliberately omit `idle_message`: this proves the
+daemon's current default rather than an explicit override.
 
 ```json
-{"action":"spawn","arguments":{"product":"sessionbus-dsh","host":"umka-dev1","name":"umka-dev1-lane-check","open":{"cwd":"LANE_CWD"},"extra_groups":["peer-dev"],"persistent":false,"auto_close_ms":0,"idle_message":"stage"}}
-{"action":"run","arguments":{"session_id":"RETURNED_SESSION_ID","input":"Reply with exactly: lane hello"}}
+{"id":"lane-spawn","action":"spawn","arguments":{"product":"sessionbus-dsh","host":"umka-dev1","name":"umka-dev1-lane-check","open":{"cwd":"LANE_CWD"},"extra_groups":["peer-dev"],"persistent":false,"auto_close_ms":0,"notify":false}}
+{"id":"lane-send","action":"send","arguments":{"target":"RETURNED_SESSION_ID","message":"Reply with exactly: lane hello"}}
+{"id":"lane-wait","action":"wait","arguments":{"session_id":"RETURNED_SESSION_ID","timeout_ms":150000}}
 ```
 
-Expected spawn result: a new session ID with host suffix `@umka-dev1`.
-Expected run handling depends on the complete retained record:
+Expected spawn result: a new session ID with host suffix `@umka-dev1` and an
+effective policy containing `idle_message: run`. The send returns one admitted
+delivery. The idle worker starts one managed Run without an explicit `run` or
+`start` call. Expected wait handling depends on the complete retained record:
 
 - `state: done` is PASS only when `result.outcome: completed` and
   `result.result` is exactly `lane hello`. Record
@@ -1199,9 +1288,9 @@ After recording the terminal state, `result.outcome`, optional
 close and forget the disposable lane with the single public close call:
 
 ```json
-{"action":"ack","arguments":{"session_id":"RETURNED_SESSION_ID","run_id":"RETURNED_RUN_ID"}}
-{"action":"close","arguments":{"session_id":"RETURNED_SESSION_ID","forget":true}}
-{"action":"list","arguments":{"session_id":"RETURNED_SESSION_ID"}}
+{"id":"lane-ack","action":"ack","arguments":{"session_id":"RETURNED_SESSION_ID","run_id":"RETURNED_RUN_ID"}}
+{"id":"lane-close","action":"close","arguments":{"session_id":"RETURNED_SESSION_ID","forget":true}}
+{"id":"lane-after-list","action":"list","arguments":{"session_id":"RETURNED_SESSION_ID"}}
 ```
 
 Expected results: `ack` consumes the already-inspected terminal record,
@@ -1252,7 +1341,7 @@ environment group:
 export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 HOST_BIN_DIR="$HOME/node_modules/.bin"
 export PATH="$HOST_BIN_DIR:$PATH"
-env -u SESSIONBUS_LAUNCH_TOKEN SESSIONBUS_GROUPS='["peer-dev"]' "$HOST_BIN_DIR/dsh" --profile web --no-open --port 3081
+env -u SESSIONBUS_LAUNCH_TOKEN SESSIONBUS_GROUPS='["peer-dev"]' "$HOST_BIN_DIR/dsh" --profile web --no-open --host 127.0.0.1 --port 0
 ```
 
 Expected terminal result: the web server stays up without a sessionbus
@@ -1264,25 +1353,26 @@ nonempty `SESSIONBUS_SOCKET`, otherwise
 path and create one root DSH session. That root advertises product `dsh` and
 group `peer-dev`; no profile row supplies the group.
 
-Launch a different authenticated observer peer on the real daemon with the
-same `SESSIONBUS_GROUPS='["peer-dev"]'` setting (or otherwise join it to
-`peer-dev`), then list and message that exact web session. `list` shows only
-peers that share at least one group with its caller:
+Use the long-lived SDK 0.5.7+ controller as a same-group sender. Keep a
+separate persistent native observer in `peer-dev` as the reply target because
+the acceptance controller is not a model and may reject incoming deliveries.
+The controller first lists and then messages the exact idle web session.
+`list` shows only peers that share at least one group with its caller:
 
 ```json
-{"action":"list","arguments":{}}
-{"action":"send","arguments":{"target":"RETURNED_DSH_SESSION_ID","message":"Reply through sessionbus to ORIGINATING_SESSION_ID with exactly: peer hello"}}
+{"id":"web-list","action":"list","arguments":{}}
+{"id":"web-send","action":"send","arguments":{"target":"RETURNED_DSH_SESSION_ID","message":"Reply through sessionbus to REPLY_SESSION_ID with exactly: peer hello"}}
 ```
 
-Expected results: the same-group observer's `list` discovers the new `dsh`
-peer with `peer-dev` among its groups. Replace `ORIGINATING_SESSION_ID` with
-that caller's authenticated `self_info.session_id`, then `send` returns a
+Expected results: the controller's `list` discovers the new `dsh` peer with
+`peer-dev` among its groups. Replace `REPLY_SESSION_ID` with the persistent
+observer's authenticated `self_info.session_id`, then `send` returns a
 successful delivery receipt. A receipt proves admission, not model
-consumption. Through the authenticated web RPC, call `session/prompt` for that
-exact session with the text `Carry out the preceding Sessionbus request now.`
-An idle web peer stages the delivery until this turn. Assert that the agent
-uses its installed `sessionbus` tool and that the originating peer receives
-`peer hello` from the authenticated `dsh` session on the real bus.
+consumption. Without a browser prompt or keypress, the idle web root starts a
+native turn, uses its installed `sessionbus` tool, and the persistent observer
+receives `peer hello` from the authenticated `dsh` session on the real bus.
+Stop the web process normally and issue one more controller `list`; the web
+row must be absent.
 
 If a send has uncertain admission, preserve its delivery ID, receipt, and
 reason and report the uncertainty. Never replay an uncertain send. Stop the
@@ -1301,9 +1391,25 @@ export PATH="$HOST_BIN_DIR:$PATH"
 env -u SESSIONBUS_LAUNCH_TOKEN SESSIONBUS_GROUPS='["peer-dev"]' "$HOST_BIN_DIR/dashi"
 ```
 
-Expected terminal result: dashi opens normally with no sessionbus
-configuration error. A remote `list` sees its root as product `dashi` with
-group `peer-dev`. Exit dashi normally after recording that row.
+Expected terminal result: dashi opens normally with no Sessionbus
+configuration error. The same-group controller's `list` sees its root as
+product `dashi` with group `peer-dev`. Keep the persistent native observer as
+the reply target and perform both human-visible checks:
+
+1. Type `/sessionbus reply over the bus to REPLY_SESSION_ID with exactly:
+   slash ok`. The transcript renders a Sessionbus skill-invocation context
+   cell, the model runs, its tool result reports an admitted delivery, and the
+   observer receives exactly `slash ok`.
+2. Wait until dashi is idle. From the long-lived controller, send the dashi
+   row `reply over the bus to REPLY_SESSION_ID with exactly: pong`. Without a
+   dashi keypress, the transcript renders a delivered Context cell naming the
+   controller, a new model turn starts, and the observer receives exactly
+   `pong`.
+
+For each case, a delivery receipt alone is insufficient: retain the dashi
+session's skill or relay event, its model turn and tool result, and the
+observer's authenticated reply. Exit dashi normally, then issue another
+controller `list`; the dashi row must be absent.
 
 Finally verify the dashi launcher without starting an interactive session:
 
@@ -1319,7 +1425,7 @@ rm "$HELP_FILE"
 Expected output:
 
 ```text
-dashi 0.1.0 on DSH 0.1.5-rc.2
+dashi 0.1.2 on DSH 0.1.5-rc.2
 dashi help exit=0
 ```
 
@@ -1347,7 +1453,7 @@ for profile_name in web sessionbus; do
   installer="$DSH_HOME/profiles/$profile_name/node_modules/.bin/sessionbus-dsh-install"
   package="$DSH_HOME/profiles/$profile_name/node_modules/@sessionbus/dsh/package.json"
   installed_version=$(if [ -f "$package" ]; then node -p 'require(process.argv[1]).version' "$package" 2>/dev/null || true; fi)
-  if [ "$installed_version" = '0.1.0-pre.13' ] && [ -x "$installer" ]; then
+  if [ "$installed_version" = '0.1.0-pre.14' ] && [ -x "$installer" ]; then
     pnpm --dir "$DSH_HOME/profiles/$profile_name" exec sessionbus-dsh-install --remove "$profile_name"
   fi
 done
