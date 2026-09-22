@@ -13,8 +13,10 @@ test("package metadata stays rooted in the standalone repository", () => {
   const manifest = packageManifest;
   assert.deepEqual(manifest.repository, {
     type: "git",
-    url: "git+https://github.com/antst/sessionbus-dsh.git",
+    url: "git+https://github.com/sessionbus/sessionbus-dsh.git",
   });
+  assert.deepEqual(manifest.bugs, { url: "https://github.com/sessionbus/sessionbus-dsh/issues" });
+  assert.equal(manifest.homepage, "https://github.com/sessionbus/sessionbus-dsh#readme");
   assert.deepEqual(manifest.bin, { "sessionbus-dsh": "launcher.mjs", "sessionbus-dsh-install": "bin.mjs" });
   assert.deepEqual(manifest.files, ["README.md", "docs/LANE-WITHOUT-TUI.md", "skills/sessionbus.md", "plugin.cjs", "launcher.mjs", "bin.mjs", "install.mjs"]);
   assert.equal(manifest.dependencies["@antst/dsh-file-uploads-none"], "^0.1.0");

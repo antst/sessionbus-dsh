@@ -8,6 +8,10 @@ were wrong. The target set is DSH `0.1.5-rc.2`, `@antst/dashi-launcher`
 `0.1.2`, `@antst/dashi-app` `0.1.2`, `@sessionbus/dsh`
 `0.1.0-pre.14`, `@sessionbus/kit` `0.5.7`, and the Sessionbus daemon
 `v0.5.7` at revision `53c5f80e281f39e54bcee1fbe8a253da86ad1c08`.
+Use the plugin source at
+[sessionbus/sessionbus-dsh](https://github.com/sessionbus/sessionbus-dsh) and
+daemon release artifacts from
+[sessionbus/sessionbus](https://github.com/sessionbus/sessionbus/releases).
 Earlier Sessionbus-dsh prereleases are superseded; pre.3 and pre.5 were never
 published. Do not continue past a failed assertion.
 
